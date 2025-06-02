@@ -1,19 +1,17 @@
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <ff/ff.hpp>
-#include <format>
-#include <iostream>
 #include <iterator>
 #include <print>
 #include <random>
 #include <thread>
-// #include <ff/pipeline.hpp>
-// #include <ff/node.hpp>
-// #include <ff/farm.hpp>
-// #include <ff/farm.hpp>
 
 using namespace std::chrono_literals;
-const int MAX_VALUE = 10;
+const auto MAX_VALUE = 10;
 
+// Not really needed to be atomic since the collector is single-threaded
+std::atomic<int64_t> counter = 0;
 
 struct IntegerEmitter : ff::ff_node_t<int> {
   IntegerEmitter(int iterations)
@@ -40,24 +38,34 @@ struct IntegerEmitter : ff::ff_node_t<int> {
   std::uniform_int_distribution<> distrib_;
 };
 
-struct SquareWorker : ff::ff_node_t<int, void> {
+struct SquareWorker : ff::ff_node_t<int> {
   SquareWorker() noexcept = default;
 
-  auto svc(int *data) -> void * override {
+  auto svc(int *data) -> int * override {
     if (data != nullptr) {
       std::unique_ptr<int> x(data);
-      std::print(">> {}\n", *x * *x);
       std::this_thread::sleep_for(100ms);
+      *x *= *x;  // Compute square
+      return x.release();
+    }
+    return GO_ON;
+  }
+};
+
+struct SumCollector : ff::ff_node_t<int, void> {
+  auto svc(int *data) -> void * override {
+    std::unique_ptr<int> square(static_cast<int *>(data));
+    if (square != nullptr) {
+      counter.fetch_add(*square, std::memory_order_relaxed);
     }
     return GO_ON;
   }
 };
 
 auto main() -> int {
-  ff::ff_pipeline pipe;
   ff::ff_farm farm;
 
-  constexpr auto NUM_WORKERS = 4;
+  constexpr auto NUM_WORKERS = 16;
   auto workers = std::vector<ff::ff_node *>();
 
   std::generate_n(std::back_inserter(workers), NUM_WORKERS, []() {
@@ -65,13 +73,11 @@ auto main() -> int {
   });
 
   farm.add_workers(workers);
+  farm.add_emitter(new IntegerEmitter(100));
+  farm.add_collector(new SumCollector());
 
-  // You could also use farm.add_emitter() instead of a pipeline, but we use it here for demostration purposes
-  pipe.add_stage(new IntegerEmitter(100));  // Stage 0
-  pipe.add_stage(farm);                     // Stage 1
+  farm.run_and_wait_end();
 
-  std::cout << "Starting pipeline...\n";
-  pipe.run_and_wait_end();
-  std::cout << "Pipeline done.\n";
+  std::print("Count: {}", counter.load());
   return 0;
 }
