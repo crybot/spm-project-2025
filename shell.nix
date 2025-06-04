@@ -22,7 +22,7 @@ let
       cd $src/ff
       bash ./mapping_string.sh # interpreter diretive uses !/bin/bash which is not available on nixos
       runHook postBuild
-    '';
+      '';
 
     installPhase = ''
       runHook preInstall
@@ -30,7 +30,7 @@ let
       mkdir -p $out/include
       cp -r $src/ff $out/include/
       runHook postInstall
-    '';
+      '';
 
     meta = with pkgs.lib; {
       description = "A C++ parallel programming framework for multi-core architectures";
@@ -40,27 +40,30 @@ let
     };
   };
 in
-pkgs.mkShell {
-  name = "fastflow-dev-shell";
+  pkgs.mkShell {
+    name = "fastflow-dev-shell";
 
-  # buildInputs are packages whose libraries and headers are made available.
-  buildInputs = [
-    fastflow-lib
-    pkgs.gcc  # For C++ compiler (g++)
-    pkgs.gnumake # For make
-    pkgs.hwloc
-    # Add other development tools you might need, e.g.:
-    # pkgs.cmake
-    # pkgs.gdb
-  ];
+    # buildInputs are packages whose libraries and headers are made available.
+    buildInputs = [
+      fastflow-lib
+      pkgs.gcc  # For C++ compiler (g++)
+      pkgs.gnumake # For make
+      pkgs.hwloc
+      pkgs.meson
+      pkgs.ninja
+      pkgs.pkg-config
+      # Add other development tools you might need, e.g.:
+      # pkgs.cmake
+      # pkgs.gdb
+    ];
 
     # # You can set environment variables here if needed, for example:
     # shellHook = ''
     #   echo "FastFlow headers are available in ${fastflow-lib}/include"
     #   export CPLUS_INCLUDE_PATH="${fastflow-lib}/include:$CPLUS_INCLUDE_PATH"
     # '';
-  # However, adding fastflow-lib to buildInputs should make compilers find it automatically
-  # via mechanisms like pkg-config or by inspecting the include paths of dependencies.
-  # For header-only libraries, CPLUS_INCLUDE_PATH or similar compiler flags are often set.
-  # Nix's stdenv setup hooks for buildInputs usually handle this for C/C++ projects.
-}
+    # However, adding fastflow-lib to buildInputs should make compilers find it automatically
+    # via mechanisms like pkg-config or by inspecting the include paths of dependencies.
+    # For header-only libraries, CPLUS_INCLUDE_PATH or similar compiler flags are often set.
+    # Nix's stdenv setup hooks for buildInputs usually handle this for C/C++ projects.
+  }
