@@ -42,21 +42,65 @@ struct Emitter : ff::ff_node_t<files::Record> {
   Emitter() = delete;
   Emitter(std::filesystem::path path) : path_{std::move(path)} {
   }
+
   auto svc(files::Record*) -> files::Record* override {
     auto record_loader = files::RecordLoader(path_);
     for (auto record : record_loader) {
       this->ff_send_out(std::make_unique<files::Record>(std::move(record)).release());
     }
-    return GO_ON;
+    return EOS;
   }
 
  private:
   std::filesystem::path path_;
 };
 
+struct Collector : ff::ff_node_t<files::Record, std::vector<files::Record>> {
+  Collector(size_t batch_size)
+      : batch_size_{batch_size}, batch_{std::make_unique<std::vector<files::Record>>()} {
+    batch_->reserve(batch_size);
+  }
+
+  // Send last batch even if not full
+  auto eosnotify(ssize_t) -> void override {
+    if (!batch_->empty()) {
+      this->ff_send_out(batch_.release());
+    }
+  }
+
+  auto svc(files::Record* record) -> std::vector<files::Record>* override {
+    if (record == nullptr) {
+      return GO_ON;
+    }
+    batch_->emplace_back(std::move(*record));
+    if (batch_->size() == batch_size_) {
+      auto batch_ptr = batch_.release();
+      batch_ = std::make_unique<std::vector<files::Record>>();
+      return batch_ptr;
+    }
+    return GO_ON;
+  }
+
+ private:
+  size_t batch_size_;
+  std::unique_ptr<std::vector<files::Record>> batch_;
+};
+
+struct BatchPrinter : ff::ff_node_t<std::vector<files::Record>, void> {
+  auto svc(std::vector<files::Record>* batch_ptr) -> void* override {
+    if (batch_ptr == nullptr) {
+      return GO_ON;
+    }
+    auto batch = std::make_unique<std::vector<files::Record>>(std::move(*batch_ptr));
+    std::cout << *batch << std::endl;
+    std::cout << "Length: " << batch->size() << std::endl;
+    return GO_ON;
+  }
+};
+
 auto main() -> int {
-  constexpr int num_records = 10;
-  constexpr uint32_t max_payload_length = 12;
+  constexpr int num_records = 31;
+  constexpr uint32_t max_payload_length = 8;
   constexpr uint32_t seed = 42;
   auto path = std::filesystem::path("test_file.bin");
   files::generateRandomFile(path, num_records, max_payload_length, seed);
@@ -67,10 +111,20 @@ auto main() -> int {
   auto records = files::readFile(path);
 
   std::cout << "Original: " << records << std::endl;
-
+  std::cout << "Length: " << records.size() << std::endl;
   std::ranges::sort(records, std::ranges::less());
+  // std::cout << "Sorted: " << records << std::endl;
 
-  std::cout << "Sorted: " << records << std::endl;
+  constexpr size_t batch_size = 5;
+  auto emitter = Emitter(path);
+  auto collector = Collector(batch_size);
+  auto printer = BatchPrinter();
+  auto pipe = ff::ff_pipeline{};
+  pipe.add_stage(emitter);
+  pipe.add_stage(&collector);  // can't pass a Collector const reference because it's stateful
+  pipe.add_stage(printer);
+
+  pipe.run_and_wait_end();
 
   return 0;
 }
