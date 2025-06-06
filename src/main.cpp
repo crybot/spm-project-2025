@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <ff/ff.hpp>
 //
 #include <ff/farm.hpp>
 #include <ff/node.hpp>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <print>
@@ -64,7 +66,11 @@ auto main() -> int {
   );
   auto records = files::readFile(path);
 
-  std::cout << records << std::endl;
+  std::cout << "Original: " << records << std::endl;
+
+  std::ranges::sort(records, std::ranges::less());
+
+  std::cout << "Sorted: " << records << std::endl;
 
   return 0;
 }
