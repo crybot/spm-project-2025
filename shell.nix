@@ -49,7 +49,8 @@ in
       pkgs.gcc  # For C++ compiler (g++)
       pkgs.gnumake # For make
       pkgs.hwloc
-      pkgs.meson
+      pkgs.meson # Does not support c++20 modules
+      # pkgs.cmake
       pkgs.ninja
       pkgs.pkg-config
       # Add other development tools you might need, e.g.:

@@ -5,7 +5,15 @@ project('spm_project', 'cpp',
 
 inc = include_directories('include')
 
-# Define our executable
-executable('spm_project', 'src/main.cpp', include_directories : inc, install : false, cpp_args : [ '-O3' ])
+executable(
+  'spm_project',
+  'src/main.cpp',
+  'src/utils.cpp',
+  'src/record.cpp',
+  'src/record_loader.cpp',
+  include_directories : inc,
+  install : false,
+  cpp_args : ['-O3' ]
+)
 
 # Meson automatically generates compile_commands.json in the build directory (e.g. for LSP servers)

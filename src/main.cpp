@@ -2,8 +2,13 @@
 //
 #include <ff/farm.hpp>
 #include <ff/node.hpp>
-#include <print>
+#include <filesystem>
 #include <iostream>
+#include <memory>
+#include <print>
+#include <utility>
+
+#include "record_loader.hpp"
 #include "utils.hpp"
 
 /*
@@ -31,18 +36,35 @@
  *
  */
 
-struct Record {
-  unsigned long key;
-  uint32_t len;
-  char payload[];
+struct Emitter : ff::ff_node_t<files::Record> {
+  Emitter() = delete;
+  Emitter(std::filesystem::path path) : path_{std::move(path)} {
+  }
+  auto svc(files::Record*) -> files::Record* override {
+    auto record_loader = files::RecordLoader(path_);
+    for (auto record : record_loader) {
+      this->ff_send_out(std::make_unique<files::Record>(std::move(record)).release());
+    }
+    return GO_ON;
+  }
+
+ private:
+  std::filesystem::path path_;
 };
 
 auto main() -> int {
-  constexpr int NUM_RECORDS = 10;
-  constexpr uint32_t MAX_PAYLOAD_LENGTH = 12; 
-  constexpr uint32_t SEED = 42;
-  files::generateRandomFile(std::filesystem::path("../test_file.bin"), NUM_RECORDS, MAX_PAYLOAD_LENGTH, SEED);
-  std::cout << files::MINIMUM_PAYLOAD_LENGTH << std::endl;
+  constexpr int num_records = 10;
+  constexpr uint32_t max_payload_length = 12;
+  constexpr uint32_t seed = 42;
+  auto path = std::filesystem::path("test_file.bin");
+  files::generateRandomFile(path, num_records, max_payload_length, seed);
+
+  std::print(
+      "File created succesfully at {}/{}\n", std::filesystem::current_path().string(), path.string()
+  );
+  auto records = files::readFile(path);
+
+  std::cout << records << std::endl;
 
   return 0;
 }
