@@ -1,8 +1,8 @@
+#include <ff/ff.hpp>
+//
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
-#include <ff/ff.hpp>
-//
 #include <ff/farm.hpp>
 #include <ff/node.hpp>
 #include <filesystem>
@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "record_loader.hpp"
+#include "stop_watch.hpp"
 #include "utils.hpp"
 
 /*
@@ -54,9 +55,11 @@ struct Emitter : ff::ff_node_t<std::vector<files::Record>> {
   auto svc(std::vector<files::Record>*) -> std::vector<files::Record>* override {
     auto record_loader = files::BufferedRecordLoader<4UL * 1024 * 1024>(path_);
 
+    auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to decode batch");
     for (auto record : record_loader) {
       batch_->emplace_back(std::move(record));
       if (batch_->size() == batch_size_) {
+        stop_watch.reset();
         this->ff_send_out(batch_.release());
         batch_ = std::make_unique<std::vector<files::Record>>();
         // batch_->reserve(batch_size_); // Somehow this makes things slower
@@ -64,6 +67,7 @@ struct Emitter : ff::ff_node_t<std::vector<files::Record>> {
     }
 
     if (batch_->size() > 0) {
+      stop_watch.reset();
       this->ff_send_out(batch_.release());
     }
     return EOS;
@@ -88,7 +92,7 @@ struct BatchPrinter : ff::ff_node_t<std::vector<files::Record>, void> {
 };
 
 auto main(int argc, char* argv[]) -> int {
-  auto path = std::filesystem::path("huge.bin");
+  auto path = std::filesystem::path("medium.bin");
 
   const size_t batch_size = argc > 1 ? std::stoi(argv[1]) : 100'000;
   const size_t num_workers = argc > 2 ? std::stoi(argv[2]) : 1;
