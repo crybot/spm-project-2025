@@ -48,27 +48,31 @@ struct Emitter : ff::ff_node_t<std::vector<files::Record>> {
   Emitter(std::filesystem::path path, size_t batch_size)
       : path_{std::move(path)},
         batch_size_{batch_size},
-        batch_{std::make_unique<std::vector<files::Record>>()} {
+        batch_{new std::vector<files::Record>()} {
+        // batch_{std::make_unique<std::vector<files::Record>>()} {
     batch_->reserve(batch_size);
   }
 
   auto svc(std::vector<files::Record>*) -> std::vector<files::Record>* override {
-    auto record_loader = files::BufferedRecordLoader<4UL * 1024 * 1024>(path_);
+    auto record_loader = files::BufferedRecordLoader<1024 * 1024>(path_);
 
-    auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to decode batch");
+    auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to decode batch", false);
     for (auto record : record_loader) {
       batch_->emplace_back(std::move(record));
       if (batch_->size() == batch_size_) {
         stop_watch.reset();
-        this->ff_send_out(batch_.release());
-        batch_ = std::make_unique<std::vector<files::Record>>();
+        this->ff_send_out(batch_);
+        batch_ = new std::vector<files::Record>;
+        // this->ff_send_out(batch_.release());
+        // batch_ = std::make_unique<std::vector<files::Record>>();
         // batch_->reserve(batch_size_); // Somehow this makes things slower
       }
     }
 
     if (batch_->size() > 0) {
       stop_watch.reset();
-      this->ff_send_out(batch_.release());
+      // this->ff_send_out(batch_.release());
+      this->ff_send_out(batch_);
     }
     return EOS;
   }
@@ -76,7 +80,8 @@ struct Emitter : ff::ff_node_t<std::vector<files::Record>> {
  private:
   std::filesystem::path path_;
   size_t batch_size_;
-  std::unique_ptr<std::vector<files::Record>> batch_;
+  // std::unique_ptr<std::vector<files::Record>> batch_;
+  std::vector<files::Record>* batch_;
 };
 
 struct BatchPrinter : ff::ff_node_t<std::vector<files::Record>, void> {
@@ -84,9 +89,12 @@ struct BatchPrinter : ff::ff_node_t<std::vector<files::Record>, void> {
     if (batch_ptr == nullptr) {
       return GO_ON;
     }
-    auto batch = std::make_unique<std::vector<files::Record>>(std::move(*batch_ptr));
-    std::ranges::sort(*batch, std::ranges::less());
-    // std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // auto batch = std::make_unique<std::vector<files::Record>>(std::move(*batch_ptr));
+    // std::ranges::sort(*batch, std::ranges::less());
+
+    auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to sort batch");
+    std::ranges::sort(*batch_ptr, std::ranges::less());
+
     return GO_ON;
   }
 };

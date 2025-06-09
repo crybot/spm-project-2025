@@ -5,13 +5,15 @@
 template <typename Duration = std::chrono::milliseconds>
 class StopWatch {
  public:
-  StopWatch(std::string_view description = "Benchmark results")
+  StopWatch(std::string_view description = "Benchmark results", bool print_last = true)
       : description_{std::move(description)},
-        begin_time_{std::chrono::high_resolution_clock::now()} {
+        begin_time_{std::chrono::high_resolution_clock::now()},
+        print_last_{print_last} {
   }
   ~StopWatch() {
-    std::print("Final measurement\n");
-    printElapsed();
+    if (print_last_) {
+      printElapsed();
+    }
   }
 
   auto reset() -> void {
@@ -22,6 +24,7 @@ class StopWatch {
  private:
   std::string description_;
   std::chrono::high_resolution_clock::time_point begin_time_;
+  bool print_last_;
 
   auto printElapsed() -> void {
     const auto end_time = std::chrono::high_resolution_clock::now();
