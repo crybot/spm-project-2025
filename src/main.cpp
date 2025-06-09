@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <ff/ff.hpp>
 //
 #include <ff/farm.hpp>
@@ -7,7 +9,9 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <ostream>
 #include <print>
+#include <thread>
 #include <utility>
 
 #include "record_loader.hpp"
@@ -38,50 +42,35 @@
  *
  */
 
-struct Emitter : ff::ff_node_t<files::Record> {
+struct Emitter : ff::ff_node_t<std::vector<files::Record>> {
   Emitter() = delete;
-  Emitter(std::filesystem::path path) : path_{std::move(path)} {
+  Emitter(std::filesystem::path path, size_t batch_size)
+      : path_{std::move(path)},
+        batch_size_{batch_size},
+        batch_{std::make_unique<std::vector<files::Record>>()} {
+    batch_->reserve(batch_size);
   }
 
-  auto svc(files::Record*) -> files::Record* override {
-    auto record_loader = files::RecordLoader(path_);
+  auto svc(std::vector<files::Record>*) -> std::vector<files::Record>* override {
+    auto record_loader = files::BufferedRecordLoader<4UL * 1024 * 1024>(path_);
+
     for (auto record : record_loader) {
-      this->ff_send_out(std::make_unique<files::Record>(std::move(record)).release());
+      batch_->emplace_back(std::move(record));
+      if (batch_->size() == batch_size_) {
+        this->ff_send_out(batch_.release());
+        batch_ = std::make_unique<std::vector<files::Record>>();
+        // batch_->reserve(batch_size_); // Somehow this makes things slower
+      }
+    }
+
+    if (batch_->size() > 0) {
+      this->ff_send_out(batch_.release());
     }
     return EOS;
   }
 
  private:
   std::filesystem::path path_;
-};
-
-struct Collector : ff::ff_node_t<files::Record, std::vector<files::Record>> {
-  Collector(size_t batch_size)
-      : batch_size_{batch_size}, batch_{std::make_unique<std::vector<files::Record>>()} {
-    batch_->reserve(batch_size);
-  }
-
-  // Send last batch even if not full
-  auto eosnotify(ssize_t) -> void override {
-    if (!batch_->empty()) {
-      this->ff_send_out(batch_.release());
-    }
-  }
-
-  auto svc(files::Record* record) -> std::vector<files::Record>* override {
-    if (record == nullptr) {
-      return GO_ON;
-    }
-    batch_->emplace_back(std::move(*record));
-    if (batch_->size() == batch_size_) {
-      auto batch_ptr = batch_.release();
-      batch_ = std::make_unique<std::vector<files::Record>>();
-      return batch_ptr;
-    }
-    return GO_ON;
-  }
-
- private:
   size_t batch_size_;
   std::unique_ptr<std::vector<files::Record>> batch_;
 };
@@ -92,37 +81,35 @@ struct BatchPrinter : ff::ff_node_t<std::vector<files::Record>, void> {
       return GO_ON;
     }
     auto batch = std::make_unique<std::vector<files::Record>>(std::move(*batch_ptr));
-    std::cout << *batch << std::endl;
-    std::cout << "Length: " << batch->size() << std::endl;
+    std::ranges::sort(*batch, std::ranges::less());
+    // std::this_thread::sleep_for(std::chrono::milliseconds(1));
     return GO_ON;
   }
 };
 
-auto main() -> int {
-  constexpr int num_records = 31;
-  constexpr uint32_t max_payload_length = 8;
-  constexpr uint32_t seed = 42;
-  auto path = std::filesystem::path("test_file.bin");
-  files::generateRandomFile(path, num_records, max_payload_length, seed);
+auto main(int argc, char* argv[]) -> int {
+  auto path = std::filesystem::path("huge.bin");
 
-  std::print(
-      "File created succesfully at {}/{}\n", std::filesystem::current_path().string(), path.string()
-  );
-  auto records = files::readFile(path);
+  const size_t batch_size = argc > 1 ? std::stoi(argv[1]) : 100'000;
+  const size_t num_workers = argc > 2 ? std::stoi(argv[2]) : 1;
 
-  std::cout << "Original: " << records << std::endl;
-  std::cout << "Length: " << records.size() << std::endl;
-  std::ranges::sort(records, std::ranges::less());
-  // std::cout << "Sorted: " << records << std::endl;
+  // auto records = files::readFile(path);
+  // std::cout << records << std::endl;
+  // std::cout << "Length: " << records.size() << std::endl;
 
-  constexpr size_t batch_size = 5;
-  auto emitter = Emitter(path);
-  auto collector = Collector(batch_size);
-  auto printer = BatchPrinter();
+  auto emitter = Emitter(path, batch_size);
   auto pipe = ff::ff_pipeline{};
-  pipe.add_stage(emitter);
-  pipe.add_stage(&collector);  // can't pass a Collector const reference because it's stateful
-  pipe.add_stage(printer);
+
+  auto farm = ff::ff_farm();
+  auto workers = std::vector<ff::ff_node*>{};
+  std::generate_n(std::back_inserter(workers), num_workers, []() {
+    return new BatchPrinter();
+  });
+  farm.set_scheduling_ondemand();
+  farm.add_workers(workers);
+
+  pipe.add_stage(&emitter);  // can't pass an Emitter const reference because it's stateful
+  pipe.add_stage(farm);
 
   pipe.run_and_wait_end();
 

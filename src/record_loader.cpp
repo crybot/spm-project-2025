@@ -1,11 +1,17 @@
 #include "record_loader.hpp"
+#include <fcntl.h> // For posix_fadvise
+#include <cassert>
+#include <cstring>
+#include <exception>
+#include <ios>
+#include <iostream>
+#include <print>
 
 files::RecordLoader::RecordLoader(const std::filesystem::path& path)
     : filestream_{path, std::ios::binary} {
 }
 
 auto files::RecordLoader::readNext() -> std::optional<files::Record> {
-  auto records = std::vector<Record>{};
   uint64_t key;
 
   if (filestream_.read(reinterpret_cast<char*>(&key), sizeof(uint64_t))) {

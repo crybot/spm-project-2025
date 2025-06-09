@@ -55,7 +55,7 @@ auto files::readFile(const std::filesystem::path& path) -> std::vector<files::Re
    * return: std::vector<Record> containing all the decoded records.
    */
   auto records = std::vector<Record>{};
-  auto record_loader = files::RecordLoader(path);
+  auto record_loader = files::BufferedRecordLoader<4UL * 1024 * 1024>(path);
 
   for (auto& record : record_loader) {
     records.emplace_back(std::move(record));
