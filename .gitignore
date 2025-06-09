@@ -3,3 +3,4 @@ main
 .cache/
 build/
 *.bin
+*.log

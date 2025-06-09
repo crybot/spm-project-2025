@@ -13,6 +13,17 @@ executable(
   'src/record_loader.cpp',
   include_directories : inc,
   install : false,
+  cpp_args : ['-O3']
+)
+
+executable(
+  'create_file',
+  'src/create_file.cpp',
+  'src/utils.cpp',
+  'src/record.cpp',
+  'src/record_loader.cpp',
+  include_directories : inc,
+  install : false,
   cpp_args : ['-O3' ]
 )
 
