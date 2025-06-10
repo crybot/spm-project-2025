@@ -86,7 +86,6 @@ class BufferedRecordLoader : public RecordLoader {
 
 }  // namespace files
 
-
 template <size_t BufferSize>
 files::BufferedRecordLoader<BufferSize>::BufferedRecordLoader(const std::filesystem::path& path)
     : RecordLoader(path), buffer_{}, buffer_size_{0}, current_pos_{0} {
@@ -115,9 +114,7 @@ auto files::BufferedRecordLoader<BufferSize>::prefetch() -> std::streamsize {
     current_pos_ = 0;
 
     // Try to fill the buffer
-    filestream_.read(
-        buffer_.data() + bytesRemaining(), buffer_.size() - bytesRemaining()
-    );
+    filestream_.read(buffer_.data() + bytesRemaining(), buffer_.size() - bytesRemaining());
     bytes_read = filestream_.gcount();
     buffer_size_ = bytes_read + remaining;
   }
@@ -130,9 +127,9 @@ auto files::BufferedRecordLoader<BufferSize>::readNext() -> std::optional<files:
   uint64_t key{0};
   uint32_t p_len{0};
 
-  // NOTE: We assume that a single record is at most contained within two adjacent buffers, that is if the current
-  // buffer does not completely contain the record being read, then for sure the next buffer will fully contain it.
-  // For example: 
+  // NOTE: We assume that a single record is at most contained within two adjacent buffers, that is
+  // if the current buffer does not completely contain the record being read, then for sure the next
+  // buffer will fully contain it. For example:
   // - Current buffer:          [<consumed_data>...<KEY><P_LEN>]
   // - Shift data to the left:  [<KEY><P_LEN>...<uninitialized_data>]
   // - Read data from buffer:   [<KEY><P_LEN><PAYLOAD>...<fresh_data>]
@@ -165,8 +162,7 @@ auto files::BufferedRecordLoader<BufferSize>::readNext() -> std::optional<files:
     std::memcpy(payload.data(), buffer_.data() + current_pos_, p_len);
     current_pos_ += p_len;
     assert(current_pos_ <= buffer_size_);
-  }
-  else if (p_len == 0) {
+  } else if (p_len == 0) {
     throw std::logic_error("Record length must be positive");
   }
   return std::make_optional<Record>(key, std::move(payload));

@@ -6,22 +6,29 @@
 namespace files {
 class MemoryArena;
 
-struct AbstractRecord {
+// template <typename C = std::vector<char>>
+struct Record {
   uint64_t key;
-  auto inline operator==(const AbstractRecord& other) const {
+  std::vector<char> payload;
+
+  auto inline operator==(const Record& other) const -> bool {
     return key == other.key;
   }
-  auto inline operator<=>(const AbstractRecord& other) const -> std::strong_ordering {
+  auto inline operator<=>(const Record& other) const -> std::strong_ordering {
     return key <=> other.key;
   }
 };
 
-struct Record : public AbstractRecord {
-  std::vector<char> payload;
-};
-
-struct RecordView : public AbstractRecord {
+struct RecordView {
+  uint64_t key;
   std::span<char> payload;
+
+  auto inline operator==(const RecordView& other) const -> bool {
+    return key == other.key;
+  }
+  auto inline operator<=>(const RecordView& other) const -> std::strong_ordering {
+    return key <=> other.key;
+  }
 };
 
 }  // namespace files
