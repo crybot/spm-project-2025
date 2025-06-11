@@ -4,8 +4,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 
 #include "record.hpp"
+#include "memory_arena.hpp"
 
 namespace files {
 /*
@@ -70,25 +72,26 @@ class RecordLoader {
 };
 
 template <size_t BufferSize>
-class BufferedRecordLoader : public RecordLoader {
+class BufferedRecordLoader {
  public:
   BufferedRecordLoader() = delete;
   BufferedRecordLoader(const std::filesystem::path&);
-  auto readNext() -> std::optional<files::Record> override;
+  auto readNext(MemoryArena<char>&) -> std::optional<files::RecordView>;
   auto bytesRemaining() const -> std::streamsize;
 
  private:
   auto prefetch() -> std::streamsize;
+  std::ifstream filestream_;
   std::array<char, BufferSize> buffer_;
-  std::size_t buffer_size_;
-  std::size_t current_pos_;
+  std::size_t buffer_size_{0};
+  std::size_t current_pos_{0};
 };
 
 }  // namespace files
 
 template <size_t BufferSize>
 files::BufferedRecordLoader<BufferSize>::BufferedRecordLoader(const std::filesystem::path& path)
-    : RecordLoader(path), buffer_{}, buffer_size_{0}, current_pos_{0} {
+    : filestream_{path}, buffer_{} {
   filestream_.read(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
   buffer_size_ = filestream_.gcount();
 }
@@ -123,10 +126,8 @@ auto files::BufferedRecordLoader<BufferSize>::prefetch() -> std::streamsize {
 }
 
 template <size_t BufferSize>
-auto files::BufferedRecordLoader<BufferSize>::readNext() -> std::optional<files::Record> {
-  uint64_t key{0};
-  uint32_t p_len{0};
-
+auto files::BufferedRecordLoader<BufferSize>::readNext(MemoryArena<char>& memory_arena)
+    -> std::optional<files::RecordView> {
   // NOTE: We assume that a single record is at most contained within two adjacent buffers, that is
   // if the current buffer does not completely contain the record being read, then for sure the next
   // buffer will fully contain it. For example:
@@ -134,6 +135,9 @@ auto files::BufferedRecordLoader<BufferSize>::readNext() -> std::optional<files:
   // - Shift data to the left:  [<KEY><P_LEN>...<uninitialized_data>]
   // - Read data from buffer:   [<KEY><P_LEN><PAYLOAD>...<fresh_data>]
   // By our assumptions <PAYLOAD> is now fully contained in the current buffer
+
+  uint64_t key{0};
+  uint32_t p_len{0};
 
   // If the first buffer does not fully contain the record's header, refill it
   std::streamsize header_size = sizeof(key) + sizeof(p_len);
@@ -157,7 +161,8 @@ auto files::BufferedRecordLoader<BufferSize>::readNext() -> std::optional<files:
     }
   }
 
-  auto payload = std::vector<char>(p_len);
+  auto payload = memory_arena.alloc(p_len);
+
   if (p_len > 0) {
     std::memcpy(payload.data(), buffer_.data() + current_pos_, p_len);
     current_pos_ += p_len;
@@ -165,5 +170,5 @@ auto files::BufferedRecordLoader<BufferSize>::readNext() -> std::optional<files:
   } else if (p_len == 0) {
     throw std::logic_error("Record length must be positive");
   }
-  return std::make_optional<Record>(key, std::move(payload));
+  return std::make_optional<RecordView>(key, std::move(payload));
 }

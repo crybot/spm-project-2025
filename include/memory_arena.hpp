@@ -1,9 +1,10 @@
+#pragma once
 #include <cassert>
 #include <print>
 #include <span>
 #include <vector>
 
-// Implement a very simple block-allocated memory arena.
+// Implement a very simple block-contiguous memory arena.
 // The arena is initialized with a single block of `size` elements of type T. Subsequent allocations with the `alloc`
 // member function return a contiguous view if the requested size fits within the current block; if not, a new block of
 // approriate size is heap-allocated (the default size is doubled until the number of requested elements fits). Previous
@@ -20,7 +21,7 @@ class MemoryArena {
   auto operator=(const MemoryArena &) -> MemoryArena & = delete;
   auto operator=(MemoryArena &&) -> MemoryArena & = delete;
 
-  ~MemoryArena();
+  // ~MemoryArena(); // default constructor is fine
 
   auto alloc(size_t) -> std::span<T>;
 

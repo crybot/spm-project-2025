@@ -14,9 +14,11 @@
 #include <thread>
 #include <utility>
 
+#include "record.hpp"
 #include "record_loader.hpp"
 #include "stop_watch.hpp"
 #include "utils.hpp"
+#include "memory_arena.hpp"
 
 /*
  *                                        SPM PROJECT
@@ -43,36 +45,32 @@
  *
  */
 
-struct Emitter : ff::ff_node_t<std::vector<files::Record>> {
+struct Emitter : ff::ff_node_t<files::RecordBatch> {
   Emitter() = delete;
-  Emitter(std::filesystem::path path, size_t batch_size)
-      : path_{std::move(path)},
-        batch_size_{batch_size},
-        batch_{new std::vector<files::Record>()} {
-        // batch_{std::make_unique<std::vector<files::Record>>()} {
-    batch_->reserve(batch_size);
+  Emitter(std::filesystem::path path, size_t batch_size, size_t expected_payload_length = 8)
+      : path_{std::move(path)}, batch_size_{batch_size}, payload_length_{expected_payload_length} {
   }
 
-  auto svc(std::vector<files::Record>*) -> std::vector<files::Record>* override {
+  auto svc(files::RecordBatch*) -> files::RecordBatch* override {
+    auto const arena_size = batch_size_ * payload_length_;
     auto record_loader = files::BufferedRecordLoader<1024 * 1024>(path_);
-
     auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to decode batch", false);
-    for (auto record : record_loader) {
-      batch_->emplace_back(std::move(record));
-      if (batch_->size() == batch_size_) {
+    auto batch_record = std::make_unique<files::RecordBatch>(batch_size_, arena_size);
+
+    while (auto record = record_loader.readNext(batch_record->arena)) {
+      batch_record->records.emplace_back(*std::move(record));
+
+      if (batch_record->records.size() == batch_size_) {
         stop_watch.reset();
-        this->ff_send_out(batch_);
-        batch_ = new std::vector<files::Record>;
-        // this->ff_send_out(batch_.release());
-        // batch_ = std::make_unique<std::vector<files::Record>>();
-        // batch_->reserve(batch_size_); // Somehow this makes things slower
+        this->ff_send_out(batch_record.release());
+
+        batch_record = std::make_unique<files::RecordBatch>(batch_size_, arena_size);
       }
     }
 
-    if (batch_->size() > 0) {
+    if (batch_record->records.size() > 0) {
       stop_watch.reset();
-      // this->ff_send_out(batch_.release());
-      this->ff_send_out(batch_);
+      this->ff_send_out(batch_record.release());
     }
     return EOS;
   }
@@ -80,20 +78,18 @@ struct Emitter : ff::ff_node_t<std::vector<files::Record>> {
  private:
   std::filesystem::path path_;
   size_t batch_size_;
-  // std::unique_ptr<std::vector<files::Record>> batch_;
-  std::vector<files::Record>* batch_;
+  size_t payload_length_;
 };
 
-struct BatchPrinter : ff::ff_node_t<std::vector<files::Record>, void> {
-  auto svc(std::vector<files::Record>* batch_ptr) -> void* override {
+struct BatchPrinter : ff::ff_node_t<files::RecordBatch, void> {
+  auto svc(files::RecordBatch* batch_ptr) -> void* override {
     if (batch_ptr == nullptr) {
       return GO_ON;
     }
-    // auto batch = std::make_unique<std::vector<files::Record>>(std::move(*batch_ptr));
-    // std::ranges::sort(*batch, std::ranges::less());
+    auto batch = std::unique_ptr<files::RecordBatch>(batch_ptr);
 
     auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to sort batch");
-    std::ranges::sort(*batch_ptr, std::ranges::less());
+    std::ranges::sort(batch_ptr->records, std::ranges::less());
 
     return GO_ON;
   }
@@ -109,7 +105,7 @@ auto main(int argc, char* argv[]) -> int {
   // std::cout << records << std::endl;
   // std::cout << "Length: " << records.size() << std::endl;
 
-  auto emitter = Emitter(path, batch_size);
+  auto emitter = Emitter(path, batch_size, 1);
   auto pipe = ff::ff_pipeline{};
 
   auto farm = ff::ff_farm();

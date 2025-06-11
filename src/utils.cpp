@@ -47,18 +47,19 @@ auto files::generateRandomFile(
   }
 }
 
-auto files::readFile(const std::filesystem::path& path) -> std::vector<files::Record> {
+auto files::readFile(const std::filesystem::path& path) -> std::vector<files::RecordView> {
   /*
    * Read a binary file from the specificed `path` containing records with the following
    * format: <uint64_t:key><uint32_t:p_len>[<char:byte_1><char:byte_2>...<char:byte_{p_len}>]
    *
    * return: std::vector<Record> containing all the decoded records.
    */
-  auto records = std::vector<Record>{};
+  auto records = std::vector<RecordView>{};
   auto record_loader = files::BufferedRecordLoader<4UL * 1024 * 1024>(path);
 
-  for (auto& record : record_loader) {
-    records.emplace_back(std::move(record));
+  auto memory_arena = MemoryArena<char>(1000);
+  while (auto record = record_loader.readNext(memory_arena)) {
+    records.emplace_back(*std::move(record));
   }
 
   return records;

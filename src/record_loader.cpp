@@ -3,9 +3,11 @@
 #include <cassert>
 #include <cstring>
 #include <exception>
+#include <functional>
 #include <ios>
 #include <iostream>
 #include <print>
+#include <stdexcept>
 
 files::RecordLoader::RecordLoader(const std::filesystem::path& path)
     : filestream_{path, std::ios::binary} {

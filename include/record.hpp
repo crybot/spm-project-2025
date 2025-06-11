@@ -2,10 +2,9 @@
 #include <cstdint>
 #include <span>
 #include <vector>
+#include "memory_arena.hpp"
 
 namespace files {
-class MemoryArena;
-
 // template <typename C = std::vector<char>>
 struct Record {
   uint64_t key;
@@ -18,7 +17,6 @@ struct Record {
     return key <=> other.key;
   }
 };
-
 struct RecordView {
   uint64_t key;
   std::span<char> payload;
@@ -28,6 +26,15 @@ struct RecordView {
   }
   auto inline operator<=>(const RecordView& other) const -> std::strong_ordering {
     return key <=> other.key;
+  }
+};
+
+struct RecordBatch {
+  MemoryArena<char> arena;
+  std::vector<RecordView> records;
+
+  RecordBatch(size_t batch_size, size_t arena_size) : arena(arena_size) {
+    records.reserve(batch_size);
   }
 };
 
