@@ -47,6 +47,13 @@
  *
  */
 
+// The Emitter node reads Records sequentially from a file and collects them into a contiguous batch
+// to exploit data locality. To improve throughput, the RecordLoader uses an internal buffer to
+// minimize read() system calls and employs a different MemoryArena per batch. This both drastically
+// reduces heap allocations when creating Records (because of the variable payload size) and
+// mitigates intra-batch false sharing issues because batches will live on different memory regions.
+// Nonetheless, the IO here is the main bottleneck and, since we cannot assume the entire dataset
+// can be stored in memory, much of the improvements are shadowed by read (and write) operations.
 struct Emitter : ff::ff_node_t<files::RecordBatch> {
   Emitter() = delete;
   Emitter(std::filesystem::path path, size_t batch_size, size_t expected_payload_length = 8)
@@ -65,7 +72,6 @@ struct Emitter : ff::ff_node_t<files::RecordBatch> {
       if (batch_record->records.size() == batch_size_) {
         // stop_watch.reset();
         this->ff_send_out(batch_record.release());
-
         batch_record = std::make_unique<files::RecordBatch>(batch_size_, arena_size);
       }
     }
@@ -194,7 +200,7 @@ auto main(int argc, char* argv[]) -> int {
   sorting_pipe.add_stage(result_collector);
 
   // Wait for each batch to be written on disk
-  sorting_pipe.run_and_wait_end();
+  sorting_pipe.run_and_wait_end(); // This acts as a barrier
 
   auto sorted_files = std::move(result_collector->sorted_files);
 
