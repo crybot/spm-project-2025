@@ -1,5 +1,6 @@
 #include <ff/ff.hpp>
 //
+#include <cstdio>
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -15,11 +16,11 @@
 #include <thread>
 #include <utility>
 
+#include "memory_arena.hpp"
 #include "record.hpp"
 #include "record_loader.hpp"
 #include "stop_watch.hpp"
 #include "utils.hpp"
-#include "memory_arena.hpp"
 
 /*
  *                                        SPM PROJECT
@@ -90,8 +91,14 @@ struct BatchSorter : ff::ff_node_t<files::RecordBatch, files::RecordBatch> {
     auto batch = std::unique_ptr<files::RecordBatch>(batch_ptr);
 
     // auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to sort batch");
-    std::ranges::sort(batch_ptr->records, std::ranges::less());
+    std::ranges::sort(batch->records, std::ranges::less());
     return batch.release();
+  }
+};
+
+struct Collector : ff::ff_node_t<files::RecordBatch> {
+  auto svc(files::RecordBatch* batch_ptr) -> files::RecordBatch* override {
+    return batch_ptr;
   }
 };
 
@@ -102,9 +109,7 @@ struct BatchWriter : ff::ff_node_t<files::RecordBatch, void> {
     }
     auto batch = std::unique_ptr<files::RecordBatch>(batch_ptr);
     auto bytes_to_write = batch->totalBytes(HEADER_SIZE);
-    auto out_buffer = std::vector<char>(bytes_to_write);
-    out_buffer.resize(bytes_to_write);
-    
+
     auto temp_file = files::temporaryFile();
     auto out_file = std::ofstream(temp_file, std::ios::binary);
 
@@ -112,32 +117,47 @@ struct BatchWriter : ff::ff_node_t<files::RecordBatch, void> {
       throw std::logic_error("Could not open temporary file");
     }
 
-    auto out_ptr = out_buffer.data();
-    for (auto& record : batch->records) {
-      uint64_t key = record.key;
-      uint32_t len = record.payload.size();
-
-      memcpy(out_ptr, &record.key, sizeof(key));
-      out_ptr += sizeof(record.key);
-
-      memcpy(out_ptr, &len, sizeof(len));
-      out_ptr += sizeof(len);
-
-      memcpy(out_ptr, record.payload.data(), len);
-      out_ptr += len;
+    auto out_buffer = std::vector<char>(bytes_to_write);
+    auto out_stream = std::span<char>(out_buffer);
+    for (const auto& record : batch->records) {
+      files::encodeRecord(record, out_stream);
     }
-
+    assert(out_stream.empty());
     out_file.write(out_buffer.data(), bytes_to_write);
     std::println("Written {} bytes to {}", bytes_to_write, temp_file.string());
-    out_file.close();
 
-    auto records = files::readFile(temp_file);
-    std::cout << records << std::endl;
-
-    return GO_ON;
+    return new std::filesystem::path(std::move(temp_file));
   }
 
+
   static const size_t HEADER_SIZE = sizeof(uint64_t) + sizeof(uint32_t);
+};
+
+struct ResultCollector : ff::ff_node_t<std::filesystem::path, void> {
+  std::vector<std::filesystem::path> sorted_files{};
+
+  auto svc(std::filesystem::path* path) -> void* override {
+    if (path) {
+      sorted_files.emplace_back(std::move(*path));
+    }
+    return GO_ON;
+  }
+};
+
+struct FileMerger : ff::ff_node {
+  FileMerger(const std::vector<std::filesystem::path>&& files) : files_(files) {
+  }
+  auto svc(void*) -> void* override {
+    for (auto& file : files_) {
+      // TODO:
+      std::println("Deleting temporary file {}", file.string());
+      std::filesystem::remove(file);
+    }
+    return EOS;
+  }
+
+ private:
+  std::vector<std::filesystem::path> files_;
 };
 
 auto main(int argc, char* argv[]) -> int {
@@ -145,23 +165,44 @@ auto main(int argc, char* argv[]) -> int {
   const size_t num_workers = argc > 2 ? std::stoi(argv[2]) : 1;
   auto path = std::filesystem::path(argv[3]);
 
+  // Emitter stage: reads file and batches records
+  auto sorting_pipe = ff::ff_pipeline{};
   auto emitter = Emitter(path, batch_size, 1);
-  auto writer = BatchWriter();
-  auto pipe = ff::ff_pipeline{};
+  sorting_pipe.add_stage(&emitter);  // can't pass an Emitter const reference because it's stateful
 
-  auto farm = ff::ff_farm();
-  auto workers = std::vector<ff::ff_node*>{};
-  std::generate_n(std::back_inserter(workers), num_workers, []() {
+  // Sorting stage: farm of workers that sorts batches
+  auto sorter_farm = ff::ff_farm();
+  auto sorter_workers = std::vector<ff::ff_node*>{};
+  std::generate_n(std::back_inserter(sorter_workers), num_workers, []() {
     return new BatchSorter();
   });
-  farm.set_scheduling_ondemand();
-  farm.add_workers(workers);
+  sorter_farm.add_workers(sorter_workers);
+  sorter_farm.add_collector(new Collector); // Collects sorted batches and forwards them
+  sorting_pipe.add_stage(sorter_farm);
 
-  pipe.add_stage(&emitter);  // can't pass an Emitter const reference because it's stateful
-  pipe.add_stage(farm);
-  pipe.add_stage(writer);
+  // Writing stage: writes sorted batches into temporary files
+  auto writer_farm = ff::ff_farm();
+  auto writer_workers = std::vector<ff::ff_node*>{};
+  std::generate_n(std::back_inserter(writer_workers), 1, []() {
+    return new BatchWriter();
+  });
+  writer_farm.add_workers(writer_workers);
+  sorting_pipe.add_stage(writer_farm);
 
-  pipe.run_and_wait_end();
+  // Collection stage: collects temporary files into a vector
+  auto result_collector = new ResultCollector();
+  sorting_pipe.add_stage(result_collector);
+
+  // Wait for each batch to be written on disk
+  sorting_pipe.run_and_wait_end();
+
+  auto sorted_files = std::move(result_collector->sorted_files);
+
+  // Merging pipeline
+  auto merging_pipe = ff::ff_pipeline{};
+  auto file_merger = FileMerger(std::move(sorted_files));
+  merging_pipe.add_stage(file_merger);
+  merging_pipe.run_and_wait_end();
 
   return 0;
 }

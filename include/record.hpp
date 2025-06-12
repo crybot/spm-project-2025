@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <cstring>
 #include <span>
+#include <stdexcept>
 #include <type_traits>
 #include <vector>
 
@@ -18,6 +20,7 @@ struct Record {
     return key <=> other.key;
   }
 };
+
 struct RecordView {
   uint64_t key;
   std::span<char> payload;
@@ -30,8 +33,12 @@ struct RecordView {
   }
 };
 
-template <typename T>
-concept IsRecord = std::is_same_v<T, files::Record> || std::is_same_v<T, files::RecordView>;
+template<typename T>
+concept IsRecord = requires(const T& r) {
+    { r.key } -> std::same_as<const uint64_t&>;
+    { r.payload.size() } -> std::convertible_to<size_t>;
+    { r.payload.data() } -> std::same_as<char*>;
+};
 
 struct RecordBatch {
   MemoryArena<char> arena;
@@ -45,5 +52,24 @@ struct RecordBatch {
     return arena.used() + records.size() * header_size;
   }
 };
+
+template<IsRecord T>
+inline auto encodeRecord(const T& record, std::span<char>& out_stream) -> void {
+  const uint64_t key = record.key;
+  const uint32_t len = record.payload.size();
+  const auto total_size = sizeof(key) + sizeof(len) + len;
+
+  if (out_stream.size() < total_size) {
+    throw std::logic_error(std::format(
+        "Not enough space left in out_stream for encoding the record of size {}", total_size
+    ));
+  }
+  memcpy(out_stream.data(), &key, sizeof(key));
+  memcpy(out_stream.data() + sizeof(key), &len, sizeof(len));
+  if (len > 0) {
+    memcpy(out_stream.data() + sizeof(key) + sizeof(len), record.payload.data(), len);
+  }
+  out_stream = out_stream.subspan(total_size);
+}
 
 }  // namespace files
