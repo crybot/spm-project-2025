@@ -8,7 +8,9 @@
 #include <print>
 #include <random>
 #include <stdexcept>
+#include <thread>
 #include <vector>
+#include <atomic>
 #include "record_loader.hpp"
 
 auto files::generateRandomFile(
@@ -47,22 +49,30 @@ auto files::generateRandomFile(
   }
 }
 
-auto files::readFile(const std::filesystem::path& path) -> std::vector<files::RecordView> {
+auto files::readFile(const std::filesystem::path& path) -> std::vector<files::Record> {
   /*
    * Read a binary file from the specificed `path` containing records with the following
    * format: <uint64_t:key><uint32_t:p_len>[<char:byte_1><char:byte_2>...<char:byte_{p_len}>]
    *
    * return: std::vector<Record> containing all the decoded records.
    */
-  auto records = std::vector<RecordView>{};
-  auto record_loader = files::BufferedRecordLoader<4UL * 1024 * 1024>(path);
+  auto records = std::vector<Record>{};
+  auto record_loader = files::RecordLoader(path);
 
-  auto memory_arena = MemoryArena<char>(1000);
-  while (auto record = record_loader.readNext(memory_arena)) {
+  while (auto record = record_loader.readNext()) {
     records.emplace_back(*std::move(record));
   }
 
   return records;
 }
 
+auto files::temporaryFile() -> std::filesystem::path {
+ static std::atomic<int> counter = 0;
 
+ // Get the thread ID for extra uniqueness
+ std::stringstream ss;
+ ss << std::this_thread::get_id();
+ std::string filename = "sorted_run_" + ss.str() + "_" + std::to_string(counter++) + ".bin";
+
+ return std::filesystem::temp_directory_path() / filename;
+}

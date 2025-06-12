@@ -91,7 +91,7 @@ class BufferedRecordLoader {
 
 template <size_t BufferSize>
 files::BufferedRecordLoader<BufferSize>::BufferedRecordLoader(const std::filesystem::path& path)
-    : filestream_{path}, buffer_{} {
+    : filestream_{path, std::ios::binary}, buffer_{} {
   filestream_.read(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
   buffer_size_ = filestream_.gcount();
 }
@@ -163,6 +163,8 @@ auto files::BufferedRecordLoader<BufferSize>::readNext(MemoryArena<char>& memory
 
   auto payload = memory_arena.alloc(p_len);
 
+  assert(payload.size_bytes() == p_len);
+
   if (p_len > 0) {
     std::memcpy(payload.data(), buffer_.data() + current_pos_, p_len);
     current_pos_ += p_len;
@@ -170,5 +172,5 @@ auto files::BufferedRecordLoader<BufferSize>::readNext(MemoryArena<char>& memory
   } else if (p_len == 0) {
     throw std::logic_error("Record length must be positive");
   }
-  return std::make_optional<RecordView>(key, std::move(payload));
+  return std::make_optional<RecordView>(key, payload);
 }

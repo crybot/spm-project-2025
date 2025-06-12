@@ -5,7 +5,6 @@
 #include "memory_arena.hpp"
 
 namespace files {
-// template <typename C = std::vector<char>>
 struct Record {
   uint64_t key;
   std::vector<char> payload;
@@ -35,6 +34,10 @@ struct RecordBatch {
 
   RecordBatch(size_t batch_size, size_t arena_size) : arena(arena_size) {
     records.reserve(batch_size);
+  }
+
+  auto totalBytes(size_t header_size = sizeof(uint64_t) + sizeof(uint32_t)) -> size_t {
+    return arena.used() + records.size() * header_size;
   }
 };
 

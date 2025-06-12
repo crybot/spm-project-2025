@@ -24,12 +24,14 @@ class MemoryArena {
   // ~MemoryArena(); // default constructor is fine
 
   auto alloc(size_t) -> std::span<T>;
+  auto used() -> size_t;
 
  private:
   std::vector<std::vector<T>> blocks_{};
   size_t block_size_;
   size_t begin_{0};
   size_t end_;
+  size_t used_{0};
 
   auto extend() -> void;
 };
@@ -58,5 +60,11 @@ auto MemoryArena<T>::alloc(size_t size) -> std::span<T> {
   auto view = std::span<T>(blocks_.back()).subspan(begin_, size);
 
   begin_ = begin_ + size;
+  used_ = used_ + size;
   return view;
+}
+
+template <typename T>
+auto MemoryArena<T>::used() -> size_t {
+  return used_ * sizeof(T);
 }
