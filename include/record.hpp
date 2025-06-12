@@ -1,7 +1,9 @@
 #pragma once
 #include <cstdint>
 #include <span>
+#include <type_traits>
 #include <vector>
+
 #include "memory_arena.hpp"
 
 namespace files {
@@ -27,6 +29,9 @@ struct RecordView {
     return key <=> other.key;
   }
 };
+
+template <typename T>
+concept IsRecord = std::is_same_v<T, files::Record> || std::is_same_v<T, files::RecordView>;
 
 struct RecordBatch {
   MemoryArena<char> arena;

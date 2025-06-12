@@ -15,7 +15,8 @@ auto readFile(const std::filesystem::path&) -> std::vector<Record>;
 auto temporaryFile() -> std::filesystem::path;
 }  // namespace files
 
-inline auto operator<<(std::ostream& os, const files::RecordView& record) -> std::ostream& {
+template<files::IsRecord T>
+inline auto operator<<(std::ostream& os, const T& record) -> std::ostream& {
   os << "(" << std::dec << record.key << ",";
   for (auto b : record.payload) {
     os << std::hex << std::showbase << static_cast<unsigned int>(b);
@@ -24,7 +25,8 @@ inline auto operator<<(std::ostream& os, const files::RecordView& record) -> std
   return os << std::dec << std::noshowbase;
 }
 
-inline auto operator<<(std::ostream& os, const std::vector<files::RecordView>& records)
+template<files::IsRecord T>
+inline auto operator<<(std::ostream& os, const std::vector<T>& records)
     -> std::ostream& {
   os << "[";
   for (auto record : records) {
@@ -34,21 +36,3 @@ inline auto operator<<(std::ostream& os, const std::vector<files::RecordView>& r
   return os;
 }
 
-inline auto operator<<(std::ostream& os, const files::Record& record) -> std::ostream& {
-  os << "(" << std::dec << record.key << ",";
-  for (auto b : record.payload) {
-    os << std::hex << std::showbase << static_cast<unsigned int>(b);
-  }
-  os << ")";
-  return os << std::dec << std::noshowbase;
-}
-
-inline auto operator<<(std::ostream& os, const std::vector<files::Record>& records)
-    -> std::ostream& {
-  os << "[";
-  for (auto record : records) {
-    os << record;
-  }
-  os << "]";
-  return os;
-}

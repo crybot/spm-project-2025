@@ -129,6 +129,10 @@ struct BatchWriter : ff::ff_node_t<files::RecordBatch, void> {
 
     out_file.write(out_buffer.data(), bytes_to_write);
     std::println("Written {} bytes to {}", bytes_to_write, temp_file.string());
+    out_file.close();
+
+    auto records = files::readFile(temp_file);
+    std::cout << records << std::endl;
 
     return GO_ON;
   }
