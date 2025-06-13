@@ -30,6 +30,18 @@ executable(
 )
 
 executable(
+  'read_file',
+  'src/read_file.cpp',
+  'src/utils.cpp',
+  'src/record.cpp',
+  'src/record_loader.cpp',
+  'src/memory_arena.cpp',
+  include_directories : inc,
+  install : false,
+  cpp_args : ['-O3' ]
+)
+
+executable(
   'memory_arena_test',
   'tests/memory_arena_test.cpp',
   'src/utils.cpp',
