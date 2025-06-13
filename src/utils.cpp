@@ -69,7 +69,6 @@ auto files::readFile(const std::filesystem::path& path) -> std::vector<files::Re
 auto files::temporaryFile() -> std::filesystem::path {
  static std::atomic<int> counter = 0;
 
- // Get the thread ID for extra uniqueness
  std::stringstream ss;
  ss << std::this_thread::get_id();
  std::string filename = "sorted_run_" + ss.str() + "_" + std::to_string(counter++) + ".bin";

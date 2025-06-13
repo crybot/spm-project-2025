@@ -1,8 +1,7 @@
 #include <ff/ff.hpp>
 //
-#include <cstdio>
 #include <algorithm>
-#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <ff/farm.hpp>
 #include <ff/node.hpp>
@@ -11,9 +10,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
-#include <ostream>
 #include <print>
-#include <thread>
 #include <utility>
 
 #include "memory_arena.hpp"
@@ -47,37 +44,37 @@
  *
  */
 
+static constexpr size_t HEADER_SIZE = sizeof(uint64_t) + sizeof(uint32_t);
+
 // The Emitter node reads Records sequentially from a file and collects them into a contiguous batch
 // to exploit data locality. To improve throughput, the RecordLoader uses an internal buffer to
 // minimize read() system calls and employs a different MemoryArena per batch. This both drastically
-// reduces heap allocations when creating Records (because of the variable payload size) and
-// mitigates intra-batch false sharing issues because batches will live on different memory regions.
-// Nonetheless, the IO here is the main bottleneck and, since we cannot assume the entire dataset
-// can be stored in memory, much of the improvements are shadowed by read (and write) operations.
-struct Emitter : ff::ff_node_t<files::RecordBatch> {
+// reduces heap allocations when creating Records and mitigates intra-batch false sharing issues
+// because batches will live on different memory regions. Nonetheless, the IO here is the main
+// bottleneck and, since we cannot assume the entire dataset can be stored in internal memory, much
+// of the improvements are shadowed by read (and write) operations.
+struct Emitter : ff::ff_node_t<files::ArenaBatch> {
   Emitter() = delete;
   Emitter(std::filesystem::path path, size_t batch_size, size_t expected_payload_length = 8)
       : path_{std::move(path)}, batch_size_{batch_size}, payload_length_{expected_payload_length} {
   }
 
-  auto svc(files::RecordBatch*) -> files::RecordBatch* override {
+  auto svc(files::ArenaBatch*) -> files::ArenaBatch* override {
     auto const arena_size = batch_size_ * payload_length_;
-    auto record_loader = files::BufferedRecordLoader<1024 * 1024>(path_);
-    // auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to decode batch", false);
-    auto batch_record = std::make_unique<files::RecordBatch>(batch_size_, arena_size);
+    auto record_loader = files::
+        BufferedRecordLoader<1024 * 1024, MemoryArena<char>, files::RecordView>(path_);
+    auto batch_record = std::make_unique<files::ArenaBatch>(batch_size_, arena_size);
 
     while (auto record = record_loader.readNext(batch_record->arena)) {
       batch_record->records.emplace_back(*std::move(record));
 
       if (batch_record->records.size() == batch_size_) {
-        // stop_watch.reset();
         this->ff_send_out(batch_record.release());
-        batch_record = std::make_unique<files::RecordBatch>(batch_size_, arena_size);
+        batch_record = std::make_unique<files::ArenaBatch>(batch_size_, arena_size);
       }
     }
 
     if (batch_record->records.size() > 0) {
-      // stop_watch.reset();
       this->ff_send_out(batch_record.release());
     }
     return EOS;
@@ -89,31 +86,30 @@ struct Emitter : ff::ff_node_t<files::RecordBatch> {
   size_t payload_length_;
 };
 
-struct BatchSorter : ff::ff_node_t<files::RecordBatch, files::RecordBatch> {
-  auto svc(files::RecordBatch* batch_ptr) -> files::RecordBatch* override {
+struct BatchSorter : ff::ff_node_t<files::ArenaBatch, files::ArenaBatch> {
+  auto svc(files::ArenaBatch* batch_ptr) -> files::ArenaBatch* override {
     if (batch_ptr == nullptr) {
       return GO_ON;
     }
-    auto batch = std::unique_ptr<files::RecordBatch>(batch_ptr);
+    auto batch = std::unique_ptr<files::ArenaBatch>(batch_ptr);
 
-    // auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to sort batch");
     std::ranges::sort(batch->records, std::ranges::less());
     return batch.release();
   }
 };
 
-struct Collector : ff::ff_node_t<files::RecordBatch> {
-  auto svc(files::RecordBatch* batch_ptr) -> files::RecordBatch* override {
+struct Collector : ff::ff_node_t<files::ArenaBatch> {
+  auto svc(files::ArenaBatch* batch_ptr) -> files::ArenaBatch* override {
     return batch_ptr;
   }
 };
 
-struct BatchWriter : ff::ff_node_t<files::RecordBatch, void> {
-  auto svc(files::RecordBatch* batch_ptr) -> void* override {
+struct BatchWriter : ff::ff_node_t<files::ArenaBatch, void> {
+  auto svc(files::ArenaBatch* batch_ptr) -> void* override {
     if (batch_ptr == nullptr) {
       return GO_ON;
     }
-    auto batch = std::unique_ptr<files::RecordBatch>(batch_ptr);
+    auto batch = std::unique_ptr<files::ArenaBatch>(batch_ptr);
     auto bytes_to_write = batch->totalBytes(HEADER_SIZE);
 
     auto temp_file = files::temporaryFile();
@@ -134,9 +130,6 @@ struct BatchWriter : ff::ff_node_t<files::RecordBatch, void> {
 
     return new std::filesystem::path(std::move(temp_file));
   }
-
-
-  static const size_t HEADER_SIZE = sizeof(uint64_t) + sizeof(uint32_t);
 };
 
 struct ResultCollector : ff::ff_node_t<std::filesystem::path, void> {
@@ -150,12 +143,71 @@ struct ResultCollector : ff::ff_node_t<std::filesystem::path, void> {
   }
 };
 
-struct FileMerger : ff::ff_node {
-  FileMerger(const std::vector<std::filesystem::path>&& files) : files_(files) {
+struct HeapNode {
+  files::Record record;
+  size_t loader_index;
+
+  auto operator<=>(const HeapNode& other) const -> std::strong_ordering {
+    return record <=> other.record;
   }
-  auto svc(void*) -> void* override {
+};
+
+struct FileMerger : ff::ff_node_t<files::RecordBatch> {
+  FileMerger(const std::vector<std::filesystem::path>&& files, size_t batch_size)
+      : files_(files), batch_size_(batch_size) {
+  }
+
+  auto svc(files::RecordBatch*) -> files::RecordBatch* override {
+    // TODO: Initializing loaders with large buffers takes a lot of time
+    auto loaders = std::vector<files::BufferedRecordLoader<1024>>{};
     for (auto& file : files_) {
-      // TODO:
+      loaders.emplace_back(file);
+    }
+
+    // std::greater<> makes it a min-queue
+    auto min_heap = std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<>>{};
+
+    DefaultHeapAllocator<char> allocator;
+    auto batch_record = std::make_unique<files::RecordBatch>(batch_size_);
+
+    // Initial blocks read (priming the min heap)
+    for (size_t i = 0; i < loaders.size(); i++) {
+      auto record = loaders[i].readNext(allocator);
+      if (record) {
+        min_heap.emplace(std::move(*record), i);
+      }
+    }
+    assert(batch_size_ > 0 && batch_record->records.size() == 0);
+
+    while (!min_heap.empty()) {
+      // Since the payloads might be large to copy by value, we "cast" away the const qualifier
+      // from the node's reference and move it
+      auto smallest = std::move(const_cast<HeapNode&>(min_heap.top()));
+      min_heap.pop();
+
+      // Track batch size in bytes to avoid recomputing it later (we do it before we move the record of course)
+      batch_record->total_size += smallest.record.payload.size() + HEADER_SIZE;
+      batch_record->records.emplace_back(std::move(smallest.record));
+
+      if (batch_record->records.size() == batch_size_) {
+        ff_send_out(batch_record.release());
+        batch_record = std::make_unique<files::RecordBatch>(batch_size_);
+      }
+
+      // If we can't read the next record, then the `loader_index`-th file has been consumed
+      // TODO: remove temporary file when loader is done
+      if (auto next_record = loaders[smallest.loader_index].readNext(allocator)) {
+        min_heap.push(
+            HeapNode{.record = std::move(*next_record), .loader_index = smallest.loader_index}
+        );
+      }
+    }
+
+    if (batch_record->records.size() > 0) {
+      ff_send_out(batch_record.release());
+    }
+
+    for (auto& file : files_) {
       std::println("Deleting temporary file {}", file.string());
       std::filesystem::remove(file);
     }
@@ -164,6 +216,41 @@ struct FileMerger : ff::ff_node {
 
  private:
   std::vector<std::filesystem::path> files_;
+  size_t batch_size_;
+};
+
+struct FileWriter : ff::ff_node_t<files::RecordBatch, void> {
+  FileWriter(const FileWriter& other
+  ) = delete;  // Cannot copy std::ofsteam and cannot move because of const qualifier
+  FileWriter(std::filesystem::path path) : out_path_{path}, out_file_{path} {
+  }
+
+  auto svc(files::RecordBatch* batch_ptr) -> void* override {
+    if (batch_ptr == nullptr) {
+      return GO_ON;
+    }
+    auto batch = std::unique_ptr<files::RecordBatch>(batch_ptr);
+    auto bytes_to_write = batch->total_size;
+
+    if (!out_file_) {
+      throw std::logic_error("Could not open output file");
+    }
+
+    auto out_buffer = std::vector<char>(bytes_to_write);
+    auto out_stream = std::span<char>(out_buffer);
+    for (const auto& record : batch->records) {
+      files::encodeRecord(record, out_stream);
+    }
+    assert(out_stream.empty());
+    out_file_.write(out_buffer.data(), bytes_to_write);
+    std::println("Written {} bytes to {}", bytes_to_write, out_path_.string());
+
+    return GO_ON;
+  }
+
+ private:
+  std::filesystem::path out_path_;
+  std::ofstream out_file_;
 };
 
 auto main(int argc, char* argv[]) -> int {
@@ -174,7 +261,7 @@ auto main(int argc, char* argv[]) -> int {
   // Emitter stage: reads file and batches records
   auto sorting_pipe = ff::ff_pipeline{};
   auto emitter = Emitter(path, batch_size, 1);
-  sorting_pipe.add_stage(&emitter);  // can't pass an Emitter const reference because it's stateful
+  sorting_pipe.add_stage(emitter);
 
   // Sorting stage: farm of workers that sorts batches
   auto sorter_farm = ff::ff_farm();
@@ -183,7 +270,7 @@ auto main(int argc, char* argv[]) -> int {
     return new BatchSorter();
   });
   sorter_farm.add_workers(sorter_workers);
-  sorter_farm.add_collector(new Collector); // Collects sorted batches and forwards them
+  sorter_farm.add_collector(new Collector);  // Collects sorted batches and forwards them
   sorting_pipe.add_stage(sorter_farm);
 
   // Writing stage: writes sorted batches into temporary files
@@ -200,14 +287,15 @@ auto main(int argc, char* argv[]) -> int {
   sorting_pipe.add_stage(result_collector);
 
   // Wait for each batch to be written on disk
-  sorting_pipe.run_and_wait_end(); // This acts as a barrier
-
-  auto sorted_files = std::move(result_collector->sorted_files);
+  sorting_pipe.run_and_wait_end();  // This acts as a barrier
 
   // Merging pipeline
   auto merging_pipe = ff::ff_pipeline{};
-  auto file_merger = FileMerger(std::move(sorted_files));
+  auto file_merger = FileMerger(std::move(result_collector->sorted_files), batch_size);
   merging_pipe.add_stage(file_merger);
+
+  auto file_writer = FileWriter("sorted.bin");
+  merging_pipe.add_stage(&file_writer);
   merging_pipe.run_and_wait_end();
 
   return 0;

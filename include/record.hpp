@@ -33,18 +33,14 @@ struct RecordView {
   }
 };
 
-template<typename T>
-concept IsRecord = requires(const T& r) {
-    { r.key } -> std::same_as<const uint64_t&>;
-    { r.payload.size() } -> std::convertible_to<size_t>;
-    { r.payload.data() } -> std::same_as<char*>;
-};
+template <typename T>
+concept IsRecord = std::is_same_v<T, files::Record> || std::is_same_v<T, files::RecordView>;
 
-struct RecordBatch {
+struct ArenaBatch {
   MemoryArena<char> arena;
   std::vector<RecordView> records;
 
-  RecordBatch(size_t batch_size, size_t arena_size) : arena(arena_size) {
+  ArenaBatch(size_t batch_size, size_t arena_size) : arena(arena_size) {
     records.reserve(batch_size);
   }
 
@@ -53,7 +49,16 @@ struct RecordBatch {
   }
 };
 
-template<IsRecord T>
+struct RecordBatch {
+  std::vector<Record> records;
+  size_t total_size{0};
+
+  RecordBatch(size_t batch_size) {
+    records.reserve(batch_size);
+  }
+};
+
+template <IsRecord T>
 inline auto encodeRecord(const T& record, std::span<char>& out_stream) -> void {
   const uint64_t key = record.key;
   const uint32_t len = record.payload.size();
@@ -69,6 +74,8 @@ inline auto encodeRecord(const T& record, std::span<char>& out_stream) -> void {
   if (len > 0) {
     memcpy(out_stream.data() + sizeof(key) + sizeof(len), record.payload.data(), len);
   }
+  // Move span `total_size` bytes to the right: although counterintuitive, here `total_size` acts as
+  // an offset
   out_stream = out_stream.subspan(total_size);
 }
 

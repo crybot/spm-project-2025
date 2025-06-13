@@ -68,3 +68,11 @@ template <typename T>
 auto MemoryArena<T>::used() -> size_t {
   return used_ * sizeof(T);
 }
+
+template <typename T>
+class DefaultHeapAllocator {
+ public:
+  auto alloc(size_t size) -> std::vector<T> {
+    return std::vector<T>(size);
+  }
+};

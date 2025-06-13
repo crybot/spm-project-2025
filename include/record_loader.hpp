@@ -5,9 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
-
 #include "record.hpp"
-#include "memory_arena.hpp"
 
 namespace files {
 /*
@@ -58,7 +56,7 @@ class RecordLoader {
 
   RecordLoader() = delete;
   RecordLoader(const std::filesystem::path&);
-  virtual auto readNext() -> std::optional<files::Record>;
+  auto readNext() -> std::optional<files::Record>;
 
   auto begin() -> iterator {
     return iterator(this);
@@ -71,12 +69,12 @@ class RecordLoader {
   std::ifstream filestream_;  // RAII, no need to manually close it
 };
 
-template <size_t BufferSize>
+template <size_t BufferSize, typename Allocator = DefaultHeapAllocator<char>, typename RecordType = files::Record>
 class BufferedRecordLoader {
  public:
   BufferedRecordLoader() = delete;
   BufferedRecordLoader(const std::filesystem::path&);
-  auto readNext(MemoryArena<char>&) -> std::optional<files::RecordView>;
+  auto readNext(Allocator&) -> std::optional<RecordType>;
   auto bytesRemaining() const -> std::streamsize;
 
  private:
@@ -89,20 +87,20 @@ class BufferedRecordLoader {
 
 }  // namespace files
 
-template <size_t BufferSize>
-files::BufferedRecordLoader<BufferSize>::BufferedRecordLoader(const std::filesystem::path& path)
+template <size_t BufferSize, typename Allocator, typename RecordType>
+files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::BufferedRecordLoader(const std::filesystem::path& path)
     : filestream_{path, std::ios::binary}, buffer_{} {
   filestream_.read(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
   buffer_size_ = filestream_.gcount();
 }
 
-template <size_t BufferSize>
-auto files::BufferedRecordLoader<BufferSize>::bytesRemaining() const -> std::streamsize {
+template <size_t BufferSize, typename Allocator, typename RecordType>
+auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::bytesRemaining() const -> std::streamsize {
   return buffer_size_ - current_pos_;
 }
 
-template <size_t BufferSize>
-auto files::BufferedRecordLoader<BufferSize>::prefetch() -> std::streamsize {
+template <size_t BufferSize, typename Allocator, typename RecordType>
+auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::prefetch() -> std::streamsize {
   // If the first buffer is already full, do nothing
   if (buffer_size_ == buffer_.size() && current_pos_ == 0) {
     return 0;
@@ -125,9 +123,9 @@ auto files::BufferedRecordLoader<BufferSize>::prefetch() -> std::streamsize {
   return bytes_read;
 }
 
-template <size_t BufferSize>
-auto files::BufferedRecordLoader<BufferSize>::readNext(MemoryArena<char>& memory_arena)
-    -> std::optional<files::RecordView> {
+template <size_t BufferSize, typename Allocator, typename RecordType>
+auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::readNext(Allocator& allocator)
+    -> std::optional<RecordType> {
   // NOTE: We assume that a single record is at most contained within two adjacent buffers, that is
   // if the current buffer does not completely contain the record being read, then for sure the next
   // buffer will fully contain it. For example:
@@ -161,9 +159,9 @@ auto files::BufferedRecordLoader<BufferSize>::readNext(MemoryArena<char>& memory
     }
   }
 
-  auto payload = memory_arena.alloc(p_len);
+  auto payload = allocator.alloc(p_len);
 
-  assert(payload.size_bytes() == p_len);
+  assert(payload.size() == p_len);
 
   if (p_len > 0) {
     std::memcpy(payload.data(), buffer_.data() + current_pos_, p_len);
@@ -172,5 +170,5 @@ auto files::BufferedRecordLoader<BufferSize>::readNext(MemoryArena<char>& memory
   } else if (p_len == 0) {
     throw std::logic_error("Record length must be positive");
   }
-  return std::make_optional<RecordView>(key, payload);
+  return std::make_optional<RecordType>(key, payload);
 }
