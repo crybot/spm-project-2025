@@ -1,56 +1,12 @@
+# /meson.build
+
 project('spm_project', 'cpp',
   version : '0.1',
-  default_options : ['warning_level=3', 'cpp_std=c++23']
+  default_options : ['warning_level=3', 'cpp_std=c++23', 'buildtype=release']
 )
 
 inc = include_directories('include')
-
-executable(
-  'spm_project',
-  'src/main.cpp',
-  'src/utils.cpp',
-  'src/record.cpp',
-  'src/record_loader.cpp',
-  'src/memory_arena.cpp',
-  include_directories : inc,
-  install : false,
-  cpp_args : ['-O3']
-)
-
-executable(
-  'create_file',
-  'src/create_file.cpp',
-  'src/utils.cpp',
-  'src/record.cpp',
-  'src/record_loader.cpp',
-  'src/memory_arena.cpp',
-  include_directories : inc,
-  install : false,
-  cpp_args : ['-O3' ]
-)
-
-executable(
-  'read_file',
-  'src/read_file.cpp',
-  'src/utils.cpp',
-  'src/record.cpp',
-  'src/record_loader.cpp',
-  'src/memory_arena.cpp',
-  include_directories : inc,
-  install : false,
-  cpp_args : ['-O3' ]
-)
-
-executable(
-  'memory_arena_test',
-  'tests/memory_arena_test.cpp',
-  'src/utils.cpp',
-  'src/record.cpp',
-  'src/record_loader.cpp',
-  'src/memory_arena.cpp',
-  include_directories : inc,
-  install : false,
-  cpp_args : ['-O3' ]
-)
-
-# Meson automatically generates compile_commands.json in the build directory (e.g. for LSP servers)
+subdir('src')
+subdir('apps')
+subdir('tools')
+subdir('tests')
