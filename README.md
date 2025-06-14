@@ -20,11 +20,25 @@ graph LR
     B -- "Unsorted Batch" --> W2;
     B -- "Unsorted Batch" --> W3;
     
-    W1 -- "Sorted Batch" --> D(Batch Writer);
-    W2 -- "Sorted Batch" --> D;
-    W3 -- "Sorted Batch" --> D;
+    W1 -- "Sorted Batch" --> C(Collector);
+    W2 -- "Sorted Batch" --> C;
+    W3 -- "Sorted Batch" --> C;
 
-    D -- "Creates Temp Runs" --> E[("Disk Storage")];
+    C --> W4;
+    C --> W5;
+    C --> W6;
+
+    subgraph Parallel Batch Writer
+        direction TB
+        W4((Worker 1))
+        W5((Worker 2))
+        W6((... N ...))
+    end
+
+    W4 -- "Creates Temp Runs" --> E[("Disk Storage")]
+    W5 -- "Creates Temp Runs" --> E;
+    W6 -- "Creates Temp Runs" --> E;
+
     E -- "Reads All Runs" --> F(K-Way Merge Sort);
     F -- "Creates Final Output" --> G[(Final Sorted File)];
 ```
