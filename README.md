@@ -51,7 +51,7 @@ Once you are inside the Nix shell, you can build the project using Meson and Nin
 
 1.  **Configure the build:**
     ```sh
-    meson setup build
+    meson setup build --buildtype=release
     ```
 
 2.  **Compile the project:**
@@ -62,36 +62,44 @@ Once you are inside the Nix shell, you can build the project using Meson and Nin
 
 ## How to Run
 
-The process involves two steps: generating a random data file and then sorting it.
+The process involves first creating a binary data file with one of the tools, and then sorting it with one of the application implementations. All executables are located in the `build/` directory, organized by their source path.
 
-#### 1. Create Data File
+#### 1\. Create Data File
 
-Use the `create_file` executable to generate a binary file with random records.
+Use the `create_file` utility located in the `tools` directory.
 
 **Usage:**
-```
-./build/create_file <num_records> <max_payload_length> <output_path>
+
+```sh
+./build/tools/create_file <num_records> <max_payload_length> <output_path>
 ```
 
 **Example:**
+To create a file named `random_data.bin` with 10 million records:
+
 ```sh
-./build/create_file 10000000 64 random_data.bin
+./build/tools/create_file 10000000 64 random_data.bin
 ```
 
-#### 2. Run Parallel Sort
+#### 2\. Run the Parallel Sort (FastFlow Implementation)
 
-Use the main `spm_project` executable to sort the file.
+Use the `ff_single_node` application to sort the file.
 
 **Usage:**
-```
-./build/spm_project <batch_size> <num_workers> <file_to_sort>
+
+```sh
+./build/apps/ff_single_node/ff_single_node <batch_size> <num_workers> <file_to_sort>
 ```
 
 **Example:**
+To sort `random_data.bin` using 8 worker threads and a batch size of 200,000 records:
+
 ```sh
-./build/spm_project 100000 4 random_data.bin
+./build/apps/ff_single_node/ff_single_node 200000 8 random_data.bin
 ```
-The application will create temporary sorted "run" files in the system's temp directory and produce a final `sorted.bin` file in the project's root directory.
+
+The application will create temporary "run" files and produce the final `sorted.bin` in the project's root directory.
+
 
 ## TODO
 
