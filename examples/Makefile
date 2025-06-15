@@ -1,5 +1,5 @@
 CXX := g++
-CXXFLAGS := -std=c++23 -O3 -pthread -Wall
+CXXFLAGS := -std=c++23 -O3 -pthread -Wall -fopenmp
 
 # Directory containing the source files
 SRCDIR = .

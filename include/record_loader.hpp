@@ -76,6 +76,7 @@ class BufferedRecordLoader {
   BufferedRecordLoader(const std::filesystem::path&);
   auto readNext(Allocator&) -> std::optional<RecordType>;
   auto bytesRemaining() const -> std::streamsize;
+  auto close() -> void;
 
  private:
   auto prefetch() -> std::streamsize;
@@ -90,6 +91,9 @@ class BufferedRecordLoader {
 template <size_t BufferSize, typename Allocator, typename RecordType>
 files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::BufferedRecordLoader(const std::filesystem::path& path)
     : filestream_{path, std::ios::binary}, buffer_{} {
+  if (!filestream_.is_open()) {
+    throw std::logic_error(std::format("Could not open file {}", path.string()));
+  }
   filestream_.read(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
   buffer_size_ = filestream_.gcount();
 }
@@ -134,6 +138,10 @@ auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::readNext(Al
   // - Read data from buffer:   [<KEY><P_LEN><PAYLOAD>...<fresh_data>]
   // By our assumptions <PAYLOAD> is now fully contained in the current buffer
 
+  if (!filestream_.is_open()) {
+    throw std::logic_error("Input stream not open");
+  }
+
   uint64_t key{0};
   uint32_t p_len{0};
 
@@ -171,4 +179,9 @@ auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::readNext(Al
     throw std::logic_error("Record length must be positive");
   }
   return std::make_optional<RecordType>(key, payload);
+}
+
+template <size_t BufferSize, typename Allocator, typename RecordType>
+auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::close() -> void {
+  filestream_.close();
 }

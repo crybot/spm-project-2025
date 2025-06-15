@@ -43,28 +43,22 @@ in
   pkgs.mkShell {
     name = "fastflow-dev-shell";
 
-    # buildInputs are packages whose libraries and headers are made available.
     buildInputs = [
       fastflow-lib
-      pkgs.gcc  # For C++ compiler (g++)
-      pkgs.gnumake # For make
+      pkgs.gcc
+      pkgs.gnumake
       pkgs.hwloc
       pkgs.meson # Does not support c++20 modules
       # pkgs.cmake
       pkgs.ninja
       pkgs.pkg-config
-      # Add other development tools you might need, e.g.:
-      # pkgs.cmake
-      # pkgs.gdb
     ];
 
-    # # You can set environment variables here if needed, for example:
     # shellHook = ''
     #   echo "FastFlow headers are available in ${fastflow-lib}/include"
     #   export CPLUS_INCLUDE_PATH="${fastflow-lib}/include:$CPLUS_INCLUDE_PATH"
     # '';
-    # However, adding fastflow-lib to buildInputs should make compilers find it automatically
-    # via mechanisms like pkg-config or by inspecting the include paths of dependencies.
-    # For header-only libraries, CPLUS_INCLUDE_PATH or similar compiler flags are often set.
-    # Nix's stdenv setup hooks for buildInputs usually handle this for C/C++ projects.
+    # Adding fastflow-lib to buildInputs should make compilers find it automatically via mechanisms like pkg-config or
+    # by inspecting the include paths of dependencies. For header-only libraries, CPLUS_INCLUDE_PATH or similar compiler
+    # flags are often set. Nix's stdenv setup hooks for buildInputs usually handle this for C/C++ projects.
   }

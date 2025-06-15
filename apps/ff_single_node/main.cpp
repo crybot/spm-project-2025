@@ -5,11 +5,14 @@
 #include <cstdlib>
 #include <ff/farm.hpp>
 #include <ff/node.hpp>
+#include <ff/parallel_for.hpp>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <print>
 #include <utility>
 
@@ -153,15 +156,39 @@ struct HeapNode {
 };
 
 struct FileMerger : ff::ff_node_t<files::RecordBatch> {
+  static constexpr size_t BUFFER_SIZE = 1024;
+
   FileMerger(const std::vector<std::filesystem::path>&& files, size_t batch_size)
       : files_(files), batch_size_(batch_size) {
   }
 
   auto svc(files::RecordBatch*) -> files::RecordBatch* override {
-    // TODO: Initializing loaders with large buffers takes a lot of time
-    auto loaders = std::vector<files::BufferedRecordLoader<1024>>{};
-    for (auto& file : files_) {
-      loaders.emplace_back(file);
+    // NOTE: Initializing loaders with large buffers takes a lot of time
+    auto loaders = std::vector<std::unique_ptr<files::BufferedRecordLoader<BUFFER_SIZE>>>(files_.size());
+
+    std::exception_ptr first_exception = nullptr;
+    std::once_flag capture_flag;  // The flag to ensure only one capture
+
+    ff::parallel_for(
+        0,
+        files_.size(),
+        [&](auto i) {
+          try {
+            loaders[i] = std::make_unique<files::BufferedRecordLoader<BUFFER_SIZE>>(files_[i]);
+          } catch (std::exception& e) {
+            std::call_once(capture_flag, [&]() {
+              first_exception = std::current_exception();
+            });
+          }
+        },
+        16  // FF_AUTO or FF_NUM_REAL_CORES do not work (probably becuase mapping_string.sh has no
+            // effect on nixos)
+    );
+
+    // Here we can safely throw the exception
+    if (first_exception) {
+      cleanup();
+      throw first_exception;
     }
 
     // std::greater<> makes it a min-queue
@@ -172,7 +199,7 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
 
     // Initial blocks read (priming the min heap)
     for (size_t i = 0; i < loaders.size(); i++) {
-      auto record = loaders[i].readNext(allocator);
+      auto record = loaders[i]->readNext(allocator);
       if (record) {
         min_heap.emplace(std::move(*record), i);
       }
@@ -190,13 +217,13 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
       batch_record->records.emplace_back(std::move(smallest.record));
 
       if (batch_record->records.size() == batch_size_) {
-        ff_send_out(batch_record.release());
+        this->ff_send_out(batch_record.release());
         batch_record = std::make_unique<files::RecordBatch>(batch_size_);
       }
 
       // If we can't read the next record, then the `loader_index`-th file has been consumed
       // TODO: remove temporary file when loader is done
-      if (auto next_record = loaders[smallest.loader_index].readNext(allocator)) {
+      if (auto next_record = loaders[smallest.loader_index]->readNext(allocator)) {
         min_heap.push(
             HeapNode{.record = std::move(*next_record), .loader_index = smallest.loader_index}
         );
@@ -204,14 +231,22 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
     }
 
     if (batch_record->records.size() > 0) {
-      ff_send_out(batch_record.release());
+      this->ff_send_out(batch_record.release());
     }
-
-    for (auto& file : files_) {
-      std::println("Deleting temporary file {}", file.string());
-      std::filesystem::remove(file);
-    }
+    cleanup();
     return EOS;
+  }
+
+  auto cleanup() -> void {
+    ff::parallel_for(
+        0,
+        files_.size(),
+        [&](auto i) {
+          // std::println("Deleting temporary file {}", files_[i].string());
+          std::filesystem::remove(files_[i]);
+        },
+        16 // FF_AUTO or FF_NUM_REAL_CORES do not work (probably becuase mapping_string.sh has no effect on nixos)
+    );
   }
 
  private:
@@ -276,7 +311,7 @@ auto main(int argc, char* argv[]) -> int {
   // Writing stage: writes sorted batches into temporary files
   auto writer_farm = ff::ff_farm();
   auto writer_workers = std::vector<ff::ff_node*>{};
-  std::generate_n(std::back_inserter(writer_workers), 1, []() {
+  std::generate_n(std::back_inserter(writer_workers), 2, []() {
     return new BatchWriter();
   });
   writer_farm.add_workers(writer_workers);
@@ -291,7 +326,7 @@ auto main(int argc, char* argv[]) -> int {
 
   // Merging pipeline
   auto merging_pipe = ff::ff_pipeline{};
-  auto file_merger = FileMerger(std::move(result_collector->sorted_files), batch_size);
+  auto file_merger = FileMerger(std::move(result_collector->sorted_files), 1000);
   merging_pipe.add_stage(file_merger);
 
   auto file_writer = FileWriter("sorted.bin");
