@@ -1,7 +1,7 @@
 #include <print>
 #include "utils.hpp"
 
-auto main(int argc, char* argv[]) -> int {
+auto main(int, char* argv[]) -> int {
   const int num_records = std::stoi(argv[1]);
   const uint32_t max_payload_length = std::stoi(argv[2]);
   constexpr uint32_t seed = 42;

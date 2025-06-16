@@ -69,7 +69,7 @@ struct Emitter : ff::ff_node_t<files::ArenaBatch> {
     auto batch_record = std::make_unique<files::ArenaBatch>(batch_size_, arena_size);
 
     while (auto record = record_loader.readNext(batch_record->arena)) {
-      batch_record->records.emplace_back(*std::move(record));
+      batch_record->records.emplace_back(std::move(*record));
 
       if (batch_record->records.size() == batch_size_) {
         this->ff_send_out(batch_record.release());
@@ -156,7 +156,7 @@ struct HeapNode {
 };
 
 struct FileMerger : ff::ff_node_t<files::RecordBatch> {
-  static constexpr size_t BUFFER_SIZE = 1024;
+  static constexpr size_t BUFFER_SIZE = 2048;
 
   FileMerger(const std::vector<std::filesystem::path>&& files, size_t batch_size)
       : files_(files), batch_size_(batch_size) {
@@ -288,30 +288,30 @@ struct FileWriter : ff::ff_node_t<files::RecordBatch, void> {
   std::ofstream out_file_;
 };
 
-auto main(int argc, char* argv[]) -> int {
-  const size_t batch_size = argc > 1 ? std::stoi(argv[1]) : 100'000;
-  const size_t num_workers = argc > 2 ? std::stoi(argv[2]) : 1;
-  auto path = std::filesystem::path(argv[3]);
+auto main(int, char* argv[]) -> int {
+  const size_t batch_size = std::stoi(argv[1]);
+  const size_t num_sorters = std::stoi(argv[2]);
+  const size_t num_writers = std::stoi(argv[3]);
+  auto path = std::filesystem::path(argv[4]);
 
   // Emitter stage: reads file and batches records
   auto sorting_pipe = ff::ff_pipeline{};
-  auto emitter = Emitter(path, batch_size, 1);
-  sorting_pipe.add_stage(emitter);
+  sorting_pipe.add_stage(new Emitter(path, batch_size, files::MINIMUM_PAYLOAD_LENGTH));
 
   // Sorting stage: farm of workers that sorts batches
   auto sorter_farm = ff::ff_farm();
   auto sorter_workers = std::vector<ff::ff_node*>{};
-  std::generate_n(std::back_inserter(sorter_workers), num_workers, []() {
+  std::generate_n(std::back_inserter(sorter_workers), num_sorters, []() {
     return new BatchSorter();
   });
   sorter_farm.add_workers(sorter_workers);
-  sorter_farm.add_collector(new Collector);  // Collects sorted batches and forwards them
+  sorter_farm.add_collector(new Collector());  // Collects sorted batches and forwards them
   sorting_pipe.add_stage(sorter_farm);
 
   // Writing stage: writes sorted batches into temporary files
   auto writer_farm = ff::ff_farm();
   auto writer_workers = std::vector<ff::ff_node*>{};
-  std::generate_n(std::back_inserter(writer_workers), 2, []() {
+  std::generate_n(std::back_inserter(writer_workers), num_writers, []() {
     return new BatchWriter();
   });
   writer_farm.add_workers(writer_workers);
@@ -326,11 +326,9 @@ auto main(int argc, char* argv[]) -> int {
 
   // Merging pipeline
   auto merging_pipe = ff::ff_pipeline{};
-  auto file_merger = FileMerger(std::move(result_collector->sorted_files), 1000);
-  merging_pipe.add_stage(file_merger);
+  merging_pipe.add_stage(new FileMerger(std::move(result_collector->sorted_files), 1000));
 
-  auto file_writer = FileWriter("sorted.bin");
-  merging_pipe.add_stage(&file_writer);
+  merging_pipe.add_stage(new FileWriter("sorted.bin"));
   merging_pipe.run_and_wait_end();
 
   return 0;

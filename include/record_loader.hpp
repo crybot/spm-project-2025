@@ -178,7 +178,7 @@ auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::readNext(Al
   } else if (p_len == 0) {
     throw std::logic_error("Record length must be positive");
   }
-  return std::make_optional<RecordType>(key, payload);
+  return std::make_optional<RecordType>(key, std::move(payload));
 }
 
 template <size_t BufferSize, typename Allocator, typename RecordType>
