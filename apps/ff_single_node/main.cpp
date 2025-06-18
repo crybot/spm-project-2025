@@ -52,7 +52,7 @@ static constexpr size_t HEADER_SIZE = sizeof(uint64_t) + sizeof(uint32_t);
 // The Emitter node reads Records sequentially from a file and collects them into a contiguous batch
 // to exploit data locality. To improve throughput, the RecordLoader uses an internal buffer to
 // minimize read() system calls and employs a different MemoryArena per batch. This both drastically
-// reduces heap allocations when creating Records and mitigates intra-batch false sharing issues
+// reduces heap allocations when creating Records and mitigates inter-batch false sharing issues
 // because batches will live on different memory regions. Nonetheless, the IO here is the main
 // bottleneck and, since we cannot assume the entire dataset can be stored in internal memory, much
 // of the improvements are shadowed by read (and write) operations.
@@ -156,7 +156,7 @@ struct HeapNode {
 };
 
 struct FileMerger : ff::ff_node_t<files::RecordBatch> {
-  static constexpr size_t BUFFER_SIZE = 2048;
+  static constexpr size_t BUFFER_SIZE = 4 * 1024 * 1024;
 
   FileMerger(const std::vector<std::filesystem::path>&& files, size_t batch_size)
       : files_(files), batch_size_(batch_size) {
@@ -174,7 +174,7 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
         files_.size(),
         [&](auto i) {
           try {
-            loaders[i] = std::make_unique<files::BufferedRecordLoader<BUFFER_SIZE>>(files_[i]);
+            loaders[i] = std::make_unique<files::BufferedRecordLoader<BUFFER_SIZE>>(files_[i], true);
           } catch (std::exception& e) {
             std::call_once(capture_flag, [&]() {
               first_exception = std::current_exception();
@@ -277,7 +277,9 @@ struct FileWriter : ff::ff_node_t<files::RecordBatch, void> {
       files::encodeRecord(record, out_stream);
     }
     assert(out_stream.empty());
+
     out_file_.write(out_buffer.data(), bytes_to_write);
+    out_file_.flush();
     std::println("Written {} bytes to {}", bytes_to_write, out_path_.string());
 
     return GO_ON;

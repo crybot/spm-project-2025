@@ -4,7 +4,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <memory>
+#include <future>
+#include <iostream>
+
 #include "record.hpp"
 
 namespace files {
@@ -65,93 +67,180 @@ class RecordLoader {
     return {};
   }
 
- protected:
+ private:
   std::ifstream filestream_;  // RAII, no need to manually close it
 };
 
-template <size_t BufferSize, typename Allocator = DefaultHeapAllocator<char>, typename RecordType = files::Record>
+template <
+    size_t BufferSize,
+    typename Allocator = DefaultHeapAllocator<char>,
+    typename RecordType = files::Record>
 class BufferedRecordLoader {
  public:
   BufferedRecordLoader() = delete;
-  BufferedRecordLoader(const std::filesystem::path&);
+  BufferedRecordLoader(const std::filesystem::path&, bool = false);
   auto readNext(Allocator&) -> std::optional<RecordType>;
   auto bytesRemaining() const -> std::streamsize;
   auto close() -> void;
+  auto eof() -> bool {
+    return eof_;
+  }
+  auto prefetching() -> bool {
+    // A prefetch is "in-flight" if the future is valid.
+    return prefetch_future_.valid();
+  }
 
  private:
   auto prefetch() -> std::streamsize;
+  auto primeBuffer() -> void;
+  auto fillPrefetchBuffer() -> std::streamsize;
+
   std::ifstream filestream_;
   std::array<char, BufferSize> buffer_;
-  std::size_t buffer_size_{0};
-  std::size_t current_pos_{0};
+  std::array<char, BufferSize> prefetch_buffer_;
+  size_t buffer_size_{0};
+  size_t current_pos_{0};
+  bool async_prefetch_{false};
+  bool eof_{false};
+  std::future<void> initial_buffer_read_;
+  std::future<std::streamsize> prefetch_future_;
+  size_t prefetch_buffer_size_{0};
+  size_t prefetch_buffer_pos_{0};
 };
 
 }  // namespace files
 
 template <size_t BufferSize, typename Allocator, typename RecordType>
-files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::BufferedRecordLoader(const std::filesystem::path& path)
-    : filestream_{path, std::ios::binary}, buffer_{} {
+files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::BufferedRecordLoader(
+    const std::filesystem::path& path, bool async_prefetch
+)
+    : filestream_{path, std::ios::binary}, async_prefetch_{async_prefetch} {
   if (!filestream_.is_open()) {
     throw std::logic_error(std::format("Could not open file {}", path.string()));
   }
+  if (async_prefetch_) {
+    initial_buffer_read_ = std::async(std::launch::async, &BufferedRecordLoader::primeBuffer, this);
+  } else {
+    primeBuffer();
+  }
+}
+
+template <size_t BufferSize, typename Allocator, typename RecordType>
+auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::primeBuffer() -> void {
   filestream_.read(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
   buffer_size_ = filestream_.gcount();
 }
 
 template <size_t BufferSize, typename Allocator, typename RecordType>
-auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::bytesRemaining() const -> std::streamsize {
+auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::fillPrefetchBuffer()
+    -> std::streamsize {
+  if (eof_) {
+    return 0;
+  }
+  if (prefetch_buffer_pos_ == 0 && prefetch_buffer_size_ == prefetch_buffer_.size()) {
+    return 0;
+  }
+
+  // Shift remaining data to the left of the prefetch buffer.
+  auto remaining = prefetch_buffer_size_ - prefetch_buffer_pos_;
+  if (prefetch_buffer_pos_ > 0) {
+    std::memmove(
+        prefetch_buffer_.data(), prefetch_buffer_.data() + prefetch_buffer_pos_, remaining
+    );
+    prefetch_buffer_size_ = remaining;
+    prefetch_buffer_pos_ = 0;
+  }
+
+  assert(prefetch_buffer_pos_ == 0);
+
+  filestream_.read(
+      prefetch_buffer_.data() + remaining,
+      static_cast<std::streamsize>(prefetch_buffer_.size()) - remaining
+  );
+  prefetch_buffer_size_ += filestream_.gcount();
+  return prefetch_buffer_size_;
+}
+
+template <size_t BufferSize, typename Allocator, typename RecordType>
+auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::bytesRemaining() const
+    -> std::streamsize {
   return buffer_size_ - current_pos_;
 }
 
 template <size_t BufferSize, typename Allocator, typename RecordType>
 auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::prefetch() -> std::streamsize {
-  // If the first buffer is already full, do nothing
   if (buffer_size_ == buffer_.size() && current_pos_ == 0) {
     return 0;
   }
 
-  std::streamsize bytes_read = 0;
-  // Shift remaining data to the left of the buffer
+  auto remaining = bytesRemaining();
+
+  // Shift remaining data to the left of the active buffer.
   if (current_pos_ > 0) {
-    auto remaining = bytesRemaining();
     std::memmove(buffer_.data(), buffer_.data() + current_pos_, remaining);
     buffer_size_ = remaining;
     current_pos_ = 0;
-
-    // Try to fill the buffer
-    filestream_.read(buffer_.data() + bytesRemaining(), buffer_.size() - bytesRemaining());
-    bytes_read = filestream_.gcount();
-    buffer_size_ = bytes_read + remaining;
   }
 
-  return bytes_read;
+  std::streamsize bytes_read_from_prefetch = 0;
+
+  // Check if a prefetch operation was in flight.
+  if (prefetch_future_.valid()) {
+    // Wait for the async read to finish and get the number of bytes read.
+    prefetch_future_.get();
+    bytes_read_from_prefetch = prefetch_buffer_size_ - prefetch_buffer_pos_;
+
+    if (bytes_read_from_prefetch > 0) {
+      // Determine how much data to copy from the prefetch buffer.
+      size_t bytes_to_copy = std::min(
+          static_cast<size_t>(bytes_read_from_prefetch), buffer_.size() - bytesRemaining()
+      );
+
+      // Copy from the prefetch buffer to the active buffer.
+      std::memcpy(
+          buffer_.data() + bytesRemaining(),
+          prefetch_buffer_.data() + prefetch_buffer_pos_,
+          bytes_to_copy
+      );
+      buffer_size_ += bytes_to_copy;
+      prefetch_buffer_pos_ += bytes_to_copy;
+    }
+  } else if (!eof_) {
+    // Fallback to synchronous read if no prefetch was initiated.
+    filestream_.read(buffer_.data() + bytesRemaining(), buffer_.size() - bytesRemaining());
+    bytes_read_from_prefetch = filestream_.gcount();
+    buffer_size_ += bytes_read_from_prefetch;
+    assert(buffer_size_ <= buffer_.size());
+  }
+
+  if (bytes_read_from_prefetch == 0) {
+    eof_ = true;
+  }
+
+  return bytes_read_from_prefetch;
 }
 
 template <size_t BufferSize, typename Allocator, typename RecordType>
 auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::readNext(Allocator& allocator)
     -> std::optional<RecordType> {
-  // NOTE: We assume that a single record is at most contained within two adjacent buffers, that is
-  // if the current buffer does not completely contain the record being read, then for sure the next
-  // buffer will fully contain it. For example:
-  // - Current buffer:          [<consumed_data>...<KEY><P_LEN>]
-  // - Shift data to the left:  [<KEY><P_LEN>...<uninitialized_data>]
-  // - Read data from buffer:   [<KEY><P_LEN><PAYLOAD>...<fresh_data>]
-  // By our assumptions <PAYLOAD> is now fully contained in the current buffer
-
   if (!filestream_.is_open()) {
     throw std::logic_error("Input stream not open");
   }
 
-  uint64_t key{0};
-  uint32_t p_len{0};
+  if (async_prefetch_ && initial_buffer_read_.valid()) {
+    initial_buffer_read_.get();
+  }
 
-  // If the first buffer does not fully contain the record's header, refill it
-  std::streamsize header_size = sizeof(key) + sizeof(p_len);
+  // If the first buffer does not fully contain the record's header, refill it.
+  std::streamsize header_size = sizeof(uint64_t) + sizeof(uint32_t);
   if (header_size > bytesRemaining()) {
     if (!prefetch() && header_size >= bytesRemaining()) {
       return {};
     }
   }
+
+  uint64_t key{0};
+  uint32_t p_len{0};
 
   std::memcpy(&key, buffer_.data() + current_pos_, sizeof(uint64_t));
   current_pos_ += sizeof(uint64_t);
@@ -168,7 +257,6 @@ auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::readNext(Al
   }
 
   auto payload = allocator.alloc(p_len);
-
   assert(payload.size() == p_len);
 
   if (p_len > 0) {
@@ -178,6 +266,16 @@ auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::readNext(Al
   } else if (p_len == 0) {
     throw std::logic_error("Record length must be positive");
   }
+
+  // After successfully reading a record, check if we need to launch a background read.
+  if (async_prefetch_ && !prefetch_future_.valid() && (bytesRemaining() < BufferSize / 2)) {
+    if (!eof_) {
+      prefetch_future_ = std::async(
+          std::launch::async, &BufferedRecordLoader::fillPrefetchBuffer, this
+      );
+    }
+  }
+
   return std::make_optional<RecordType>(key, std::move(payload));
 }
 
