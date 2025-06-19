@@ -144,7 +144,7 @@ auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::fillPrefetc
   // Shift remaining data to the left of the prefetch buffer.
   auto remaining = prefetch_buffer_size_ - prefetch_buffer_pos_;
   if (prefetch_buffer_pos_ > 0) {
-    std::memmove(
+    std::memcpy(
         prefetch_buffer_.data(), prefetch_buffer_.data() + prefetch_buffer_pos_, remaining
     );
     prefetch_buffer_size_ = remaining;
@@ -177,7 +177,7 @@ auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::prefetch() 
 
   // Shift remaining data to the left of the active buffer.
   if (current_pos_ > 0) {
-    std::memmove(buffer_.data(), buffer_.data() + current_pos_, remaining);
+    std::memcpy(buffer_.data(), buffer_.data() + current_pos_, remaining);
     buffer_size_ = remaining;
     current_pos_ = 0;
   }
@@ -268,7 +268,7 @@ auto files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::readNext(Al
   }
 
   // After successfully reading a record, check if we need to launch a background read.
-  if (async_prefetch_ && !prefetch_future_.valid() && (bytesRemaining() < BufferSize / 2)) {
+  if (async_prefetch_ && !prefetch_future_.valid() && (bytesRemaining() < BufferSize / 2) && bytesRemaining()) {
     if (!eof_) {
       prefetch_future_ = std::async(
           std::launch::async, &BufferedRecordLoader::fillPrefetchBuffer, this

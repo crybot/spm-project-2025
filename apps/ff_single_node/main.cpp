@@ -1,3 +1,4 @@
+#include <chrono>
 #include <ff/ff.hpp>
 //
 #include <algorithm>
@@ -14,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <print>
+#include <thread>
 #include <utility>
 
 #include "memory_arena.hpp"
@@ -156,7 +158,7 @@ struct HeapNode {
 };
 
 struct FileMerger : ff::ff_node_t<files::RecordBatch> {
-  static constexpr size_t BUFFER_SIZE = 4 * 1024 * 1024;
+  static constexpr size_t BUFFER_SIZE = 8*1024;
 
   FileMerger(const std::vector<std::filesystem::path>&& files, size_t batch_size)
       : files_(files), batch_size_(batch_size) {
@@ -206,6 +208,7 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
     }
     assert(batch_size_ > 0 && batch_record->records.size() == 0);
 
+    auto stop_watch = StopWatch<std::chrono::microseconds>("Time to merge batch", false, true);
     while (!min_heap.empty()) {
       // Since the payloads might be large to copy by value, we "cast" away the const qualifier
       // from the node's reference and move it
@@ -219,6 +222,7 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
       if (batch_record->records.size() == batch_size_) {
         this->ff_send_out(batch_record.release());
         batch_record = std::make_unique<files::RecordBatch>(batch_size_);
+        stop_watch.reset();
       }
 
       // If we can't read the next record, then the `loader_index`-th file has been consumed
@@ -264,6 +268,7 @@ struct FileWriter : ff::ff_node_t<files::RecordBatch, void> {
     if (batch_ptr == nullptr) {
       return GO_ON;
     }
+    auto stop_watch = StopWatch<std::chrono::microseconds>("Time to write merged batch");
     auto batch = std::unique_ptr<files::RecordBatch>(batch_ptr);
     auto bytes_to_write = batch->total_size;
 
@@ -280,7 +285,7 @@ struct FileWriter : ff::ff_node_t<files::RecordBatch, void> {
 
     out_file_.write(out_buffer.data(), bytes_to_write);
     out_file_.flush();
-    std::println("Written {} bytes to {}", bytes_to_write, out_path_.string());
+    // std::println("Written {} bytes to {}", bytes_to_write, out_path_.string());
 
     return GO_ON;
   }
@@ -328,7 +333,7 @@ auto main(int, char* argv[]) -> int {
 
   // Merging pipeline
   auto merging_pipe = ff::ff_pipeline{};
-  merging_pipe.add_stage(new FileMerger(std::move(result_collector->sorted_files), 1000));
+  merging_pipe.add_stage(new FileMerger(std::move(result_collector->sorted_files), 10000));
 
   merging_pipe.add_stage(new FileWriter("sorted.bin"));
   merging_pipe.run_and_wait_end();
