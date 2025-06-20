@@ -47,7 +47,7 @@
  *
  */
 
-static constexpr size_t HEADER_SIZE = sizeof(uint64_t) + sizeof(uint32_t);
+static constexpr size_t header_size = sizeof(uint64_t) + sizeof(uint32_t);
 
 // The Emitter node reads Records sequentially from a file and collects them into a contiguous batch
 // to exploit data locality. To improve throughput, the RecordLoader uses an internal buffer to
@@ -113,7 +113,7 @@ struct BatchWriter : ff::ff_node_t<files::ArenaBatch, void> {
       return GO_ON;
     }
     auto batch = std::unique_ptr<files::ArenaBatch>(batch_ptr);
-    auto bytes_to_write = batch->totalBytes(HEADER_SIZE);
+    auto bytes_to_write = batch->totalBytes(header_size);
 
     auto temp_file = files::temporaryFile();
     auto out_file = std::ofstream(temp_file, std::ios::binary);
@@ -146,15 +146,6 @@ struct ResultCollector : ff::ff_node_t<std::filesystem::path, void> {
   }
 };
 
-struct HeapNode {
-  files::Record record;
-  size_t loader_index;
-
-  auto operator<=>(const HeapNode& other) const -> std::strong_ordering {
-    return record <=> other.record;
-  }
-};
-
 struct FileMerger : ff::ff_node_t<files::RecordBatch> {
   static constexpr size_t BUFFER_SIZE = 2048;
 
@@ -164,7 +155,9 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
 
   auto svc(files::RecordBatch*) -> files::RecordBatch* override {
     // NOTE: Initializing loaders with large buffers takes a lot of time
-    auto loaders = std::vector<std::unique_ptr<files::BufferedRecordLoader<BUFFER_SIZE>>>(files_.size());
+    auto loaders = std::vector<std::unique_ptr<files::BufferedRecordLoader<BUFFER_SIZE>>>(
+        files_.size()
+    );
 
     std::exception_ptr first_exception = nullptr;
     std::once_flag capture_flag;  // The flag to ensure only one capture
@@ -192,7 +185,8 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
     }
 
     // std::greater<> makes it a min-queue
-    auto min_heap = std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<>>{};
+    auto min_heap = std::
+        priority_queue<files::HeapNode, std::vector<files::HeapNode>, std::greater<>>{};
 
     DefaultHeapAllocator<char> allocator;
     auto batch_record = std::make_unique<files::RecordBatch>(batch_size_);
@@ -209,11 +203,12 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
     while (!min_heap.empty()) {
       // Since the payloads might be large to copy by value, we "cast" away the const qualifier
       // from the node's reference and move it
-      auto smallest = std::move(const_cast<HeapNode&>(min_heap.top()));
+      auto smallest = std::move(const_cast<files::HeapNode&>(min_heap.top()));
       min_heap.pop();
 
-      // Track batch size in bytes to avoid recomputing it later (we do it before we move the record of course)
-      batch_record->total_size += smallest.record.payload.size() + HEADER_SIZE;
+      // Track batch size in bytes to avoid recomputing it later (we do it before we move the record
+      // of course)
+      batch_record->total_size += smallest.record.payload.size() + header_size;
       batch_record->records.emplace_back(std::move(smallest.record));
 
       if (batch_record->records.size() == batch_size_) {
@@ -224,9 +219,9 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
       // If we can't read the next record, then the `loader_index`-th file has been consumed
       // TODO: remove temporary file when loader is done
       if (auto next_record = loaders[smallest.loader_index]->readNext(allocator)) {
-        min_heap.push(
-            HeapNode{.record = std::move(*next_record), .loader_index = smallest.loader_index}
-        );
+        min_heap.push(files::HeapNode{
+            .record = std::move(*next_record), .loader_index = smallest.loader_index
+        });
       }
     }
 
@@ -245,7 +240,8 @@ struct FileMerger : ff::ff_node_t<files::RecordBatch> {
           // std::println("Deleting temporary file {}", files_[i].string());
           std::filesystem::remove(files_[i]);
         },
-        16 // FF_AUTO or FF_NUM_REAL_CORES do not work (probably becuase mapping_string.sh has no effect on nixos)
+        16  // FF_AUTO or FF_NUM_REAL_CORES do not work (probably becuase mapping_string.sh has no
+            // effect on nixos)
     );
   }
 

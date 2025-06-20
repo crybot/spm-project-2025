@@ -79,4 +79,15 @@ inline auto encodeRecord(const T& record, std::span<char>& out_stream) -> void {
   out_stream = out_stream.subspan(total_size);
 }
 
+struct HeapNode {
+  // TODO: delete default constructor
+  files::Record record;
+  size_t loader_index;
+
+  auto operator<=>(const HeapNode& other) const -> std::strong_ordering {
+    return record <=> other.record;
+  }
+};
+
+
 }  // namespace files
