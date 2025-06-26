@@ -124,22 +124,52 @@ auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_
   std::cout << std::format("Sending {}/{} records per worker", records_per_worker, offsets.size())
             << std::endl;
 
-  // Prepare send counts (ignore ranks 0; rank world_size - 1 is treated right
-  // after the loop) Basically computes adjacent differences with a stride of `records_per_worker`
-  auto send_counts = std::vector<int>(world_size, 0);  // Initialize to 0
-  auto last_count = 0;
-  for (auto w = 1; w < world_size - 1; w++) {
-    send_counts[w] = static_cast<int>(offsets[records_per_worker * w]) - last_count;
-    last_count = send_counts[w];
-  }
-  send_counts[world_size - 1] = total_bytes -
-                                static_cast<int>(offsets[records_per_worker * (world_size - 2)]);
+  // Prepare send counts and displacements
+  // Ignore ranks 0;
+  // Last worker takes any extra bytes
+  // TODO: check offsets and displacements overflow overflows (batch_size < std::numeric_limits<int>)
+  auto send_counts = std::vector<int>(world_size, 0); 
+  auto displacements = std::vector<int>(world_size, 0);
+  size_t last_end = 0;
+  size_t computed_total = 0; // Used as a sanity check
+  
+  for (auto w = 1; w < world_size; w++) {
+    auto start_offset = last_end;
+    auto end_offset = (w == world_size - 1) ? total_bytes : offsets[records_per_worker * w];
 
-  // MPI_IN_PLACE avoids the copy from send_counts[0] into a local buffer in the root node
+    send_counts[w] = static_cast<int>(end_offset - start_offset);
+    displacements[w] = static_cast<int>(start_offset);
+    last_end = end_offset;
+    computed_total += send_counts[w];
+    assert(displacements[w] < static_cast<int>(serialized_batch.bytes.size()));
+  }
+  assert(computed_total == serialized_batch.bytes.size());
+
   std::cout << "Sending counts ";
   std::ranges::copy(send_counts, std::ostream_iterator<int>(std::cout, " "));
   std::cout << std::endl;
+
+  // Send counts
+  // MPI_IN_PLACE avoids the copy from send_counts[0] into a local buffer in the root node
   MPI_Scatter(send_counts.data(), 1, MPI_INT, MPI_IN_PLACE, 1, MPI_INT, root_rank, communicator);
+
+  std::cout << "Sending displacements ";
+  std::ranges::copy(displacements, std::ostream_iterator<int>(std::cout, " "));
+  std::cout << std::endl;
+
+  // Send variable-sized records
+  MPI_Scatterv(
+      serialized_batch.bytes.data(),
+      send_counts.data(),
+      displacements.data(),
+      MPI_BYTE,
+      MPI_IN_PLACE,
+      0,
+      MPI_BYTE,
+      root_rank,
+      communicator
+  );
+
 }
 
 auto signalEos(int world_size, MPI_Comm communicator) -> void {
@@ -161,13 +191,14 @@ auto createBatches(const std::filesystem::path& file_to_sort, const size_t batch
   {
 #pragma omp single
     {
+      auto order_token = 0;
       auto batch_stop_watch = StopWatch<std::chrono::microseconds>("Time to read batch");
       while (auto record = record_loader.readNext(batch_record->arena)) {
         batch_record->records.emplace_back(std::move(*record));
 
         if (batch_record->records.size() == batch_size) {
           batch_stop_watch.reset();
-#pragma omp task firstprivate(batch_record) depend(inout : batch_record)
+#pragma omp task firstprivate(batch_record) depend(inout : order_token)
           {
             auto stop_watch = StopWatch<std::chrono::microseconds>("Time to serialize batch");
             scatterBatch(std::move(batch_record), world_size, communicator);
@@ -177,7 +208,7 @@ auto createBatches(const std::filesystem::path& file_to_sort, const size_t batch
       }
 
       if (batch_record->records.size() > 0) {
-#pragma omp task firstprivate(batch_record) depend(in : batch_record)
+#pragma omp task firstprivate(batch_record) depend(inout : order_token)
         {
           auto stop_watch = StopWatch<std::chrono::microseconds>("Time to serialize batch");
           scatterBatch(std::move(batch_record), world_size, communicator);
@@ -206,6 +237,20 @@ auto worker(int rank, MPI_Comm communicator) -> void {
     if (count == EOS_SIGNAL) {
       break;
     }
+
+    auto serialized_records = std::vector<char>(count);
+
+    MPI_Scatterv(
+        nullptr,
+        nullptr,
+        nullptr,
+        MPI_BYTE,
+        serialized_records.data(),
+        count,
+        MPI_BYTE,
+        root_rank,
+        communicator
+    );
   }
 
   std::cout << std::format("Worker {} terminating", rank) << std::endl;
@@ -217,7 +262,7 @@ auto collector() -> void {
 
 auto main(int argc, char* argv[]) -> int {
   int provided;
-  MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+  MPI_Init_thread(&argc, &argv, MPI_THREAD_SERIALIZED, &provided);
 
   int rank;
   int world_size;
@@ -251,6 +296,8 @@ auto main(int argc, char* argv[]) -> int {
   else {  // worker
     worker(rank, emitter_workers_comm);
   }
+
+  // MPI_Comm_free(&emitter_workers_comm);
 
   MPI_Finalize();
   return 0;
