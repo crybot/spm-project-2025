@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
+#include <format>
+#include <istream>
 
 #include "memory_arena.hpp"
 
@@ -89,5 +91,41 @@ struct HeapNode {
   }
 };
 
+class MemoryViewStreambuf : public std::streambuf {
+ public:
+  MemoryViewStreambuf(const char* data, size_t size) {
+    auto start_p = const_cast<char*>(data);
+    this->setg(start_p, start_p, start_p + size);
+  }
+};
+
+/**
+ * An input stream that provides a non-owning, zero-copy view over
+ * a contiguous block of memory. Emulates C++23's std::ispanstream.
+ */
+class MemoryViewInputStream : public std::istream {
+ public:
+  MemoryViewInputStream(char* data, size_t size) : std::istream(nullptr), sbuf_(data, size) {
+    this->rdbuf(&sbuf_);
+  }
+  MemoryViewInputStream(const char* data, size_t size) : std::istream(nullptr), sbuf_(data, size) {
+    this->rdbuf(&sbuf_);
+  }
+
+  explicit MemoryViewInputStream(std::span<char> s) : MemoryViewInputStream(s.data(), s.size()) {
+  }
+  explicit MemoryViewInputStream(std::vector<char>& v) : MemoryViewInputStream(v.data(), v.size()) {
+  }
+
+  explicit MemoryViewInputStream(std::span<const char> s)
+      : MemoryViewInputStream(s.data(), s.size()) {
+  }
+  explicit MemoryViewInputStream(const std::vector<char>& v)
+      : MemoryViewInputStream(v.data(), v.size()) {
+  }
+
+ private:
+  MemoryViewStreambuf sbuf_;
+};
 
 }  // namespace files

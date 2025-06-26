@@ -1,6 +1,7 @@
 #include <chrono>
-#include <print>
+#include <iostream>
 #include <string_view>
+#include <format>
 
 template <typename Duration = std::chrono::milliseconds>
 class StopWatch {
@@ -30,7 +31,9 @@ class StopWatch {
     const auto end_time = std::chrono::high_resolution_clock::now();
     const auto elapsed = std::chrono::duration_cast<Duration>(end_time - begin_time_);
 
-    std::print("{}\nElapsed time ({}): {}\n\n", description_, getDurationSuffix(), elapsed.count());
+    std::cout << std::format(
+        "{}\nElapsed time ({}): {}\n\n", description_, getDurationSuffix(), elapsed.count()
+    );
   }
 
   static consteval auto getDurationSuffix() -> const char* {
