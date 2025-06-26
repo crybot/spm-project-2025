@@ -9,6 +9,7 @@ namespace files {
 
 constexpr uint32_t MINIMUM_PAYLOAD_LENGTH = 8;
 constexpr uint32_t DEFAULT_SEED = 42;
+constexpr size_t HEADER_SIZE = sizeof(uint64_t) + sizeof(uint32_t);
 
 auto generateRandomFile(const std::filesystem::path&, int, uint32_t, uint32_t = DEFAULT_SEED)
     -> void;

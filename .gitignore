@@ -2,5 +2,6 @@ main
 .direnv/
 .cache/
 build/
+build_make/
 *.bin
 *.log

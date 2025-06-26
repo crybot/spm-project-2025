@@ -13,7 +13,6 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <print>
 #include <utility>
 
 #include "memory_arena.hpp"
@@ -23,7 +22,7 @@
 #include "utils.hpp"
 
 /*
- *                                        SPM PROJECT
+ *                                  SPM PROJECT (single node: FF)
  * Design and implement a scalable MergeSort for an N-record file where each record can have a
  * different size in the range [8, PAYLOAD_MAX], where PAYLOAD_MAX is a constant value. A possible
  * C-like representation of one record is as follows: The payload is a blob of bytes arbitrarily
@@ -129,7 +128,7 @@ struct BatchWriter : ff::ff_node_t<files::ArenaBatch, void> {
     }
     assert(out_stream.empty());
     out_file.write(out_buffer.data(), bytes_to_write);
-    std::println("Written {} bytes to {}", bytes_to_write, temp_file.string());
+    // std::println("Written {} bytes to {}", bytes_to_write, temp_file.string());
 
     return new std::filesystem::path(std::move(temp_file));
   }
@@ -274,7 +273,7 @@ struct FileWriter : ff::ff_node_t<files::RecordBatch, void> {
     }
     assert(out_stream.empty());
     out_file_.write(out_buffer.data(), bytes_to_write);
-    std::println("Written {} bytes to {}", bytes_to_write, out_path_.string());
+    // std::println("Written {} bytes to {}", bytes_to_write, out_path_.string());
 
     return GO_ON;
   }

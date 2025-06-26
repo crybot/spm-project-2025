@@ -4,7 +4,6 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <print>
 #include <queue>
 #include <string>
 #include <vector>
@@ -43,7 +42,7 @@ auto sortAndWrite(std::shared_ptr<files::ArenaBatch> batch) -> void {
     }
     assert(out_stream.empty());
     out_file.write(out_buffer.data(), static_cast<std::streamsize>(bytes_to_write));
-    std::println("Written {} bytes to {}", bytes_to_write, temp_file.string());
+    // std::println("Written {} bytes to {}", bytes_to_write, temp_file.string());
     total_bytes += bytes_to_write;
 
     {
@@ -67,7 +66,6 @@ auto createSortedRunsOmp(
           BufferedRecordLoader<BUFFER_SIZE, MemoryArena<char>, files::RecordView>(file_to_sort);
       auto batch_record = std::make_shared<files::ArenaBatch>(batch_size, arena_size);
 
-      // TODO: here we might use taskloop instead of task (what's the difference?)
       while (auto record = record_loader.readNext(batch_record->arena)) {
         batch_record->records.emplace_back(std::move(*record));
 
@@ -88,7 +86,7 @@ auto createSortedRunsOmp(
 auto cleanupTemporaryFiles(const std::vector<std::filesystem::path>& file_paths) -> void {
 #pragma omp parallel for
   for (auto i = 0UL; i < file_paths.size(); i++) {
-    std::println("Deleting temporary file {}", file_paths[i].string());
+    // std::println("Deleting temporary file {}", file_paths[i].string());
     std::filesystem::remove(file_paths[i]);
   }
 }
@@ -111,7 +109,7 @@ auto writeOutputFile(std::ofstream& out_file, std::shared_ptr<files::RecordBatch
   assert(out_stream.empty());
 
   out_file.write(out_buffer.data(), static_cast<std::streamsize>(bytes_to_write));
-  std::println("Written {} bytes to output file", bytes_to_write);
+  // std::println("Written {} bytes to output file", bytes_to_write);
 }
 
 auto mergeFiles(const std::vector<std::filesystem::path>& files, size_t batch_size) -> void {
@@ -214,7 +212,7 @@ auto main(int, char* argv[]) -> int {
   const size_t arena_size = batch_size * files::MINIMUM_PAYLOAD_LENGTH;
 
   createSortedRunsOmp(path, batch_size, arena_size);
-  std::println("Total bytes written: {}", total_bytes.load());
+  // std::println("Total bytes written: {}", total_bytes.load());
 
   mergeFiles(temp_file_paths, 1000);
 

@@ -49,9 +49,10 @@ in
       pkgs.gnumake
       pkgs.hwloc
       pkgs.meson # Does not support c++20 modules
-      # pkgs.cmake
+      pkgs.cmake
       pkgs.ninja
       pkgs.pkg-config
+      pkgs.mpi
     ];
 
     # shellHook = ''

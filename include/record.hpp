@@ -61,7 +61,7 @@ struct RecordBatch {
 };
 
 template <IsRecord T>
-inline auto encodeRecord(const T& record, std::span<char>& out_stream) -> void {
+inline auto encodeRecord(const T& record, std::span<char>& out_stream) -> size_t {
   const uint64_t key = record.key;
   const uint32_t len = record.payload.size();
   const auto total_size = sizeof(key) + sizeof(len) + len;
@@ -79,6 +79,7 @@ inline auto encodeRecord(const T& record, std::span<char>& out_stream) -> void {
   // Move span `total_size` bytes to the right: although counterintuitive, here `total_size` acts as
   // an offset
   out_stream = out_stream.subspan(total_size);
+  return total_size;
 }
 
 struct HeapNode {

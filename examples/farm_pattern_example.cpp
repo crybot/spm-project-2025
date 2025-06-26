@@ -8,7 +8,7 @@
 #include <format>
 #include <iterator>
 #include <memory>
-#include <print>
+// #include <print>
 #include <random>
 #include <thread>
 
@@ -42,7 +42,7 @@ struct SquareWorker : ff::ff_node_t<int, void> {
   auto svc(int *data) -> void * override {
     if (data != nullptr) {
       std::unique_ptr<int> x(data);
-      std::print(">> {}\n", *x * *x);
+      // std::print(">> {}\n", *x * *x);
       std::this_thread::sleep_for(100ms);
     }
     return GO_ON;

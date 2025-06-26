@@ -1,13 +1,13 @@
 // Conceptual example for an Emitter node's svc method
 #include <ff/ff.hpp>
 #include <memory>
-#include <print>
+// #include <print>
 
 struct MyTask {
   int data; /* other members */
 
   ~MyTask() {
-    std::println("Destryoing object {}", data); // To test std::unique_ptr automatic deallocation
+    // std::println("Destryoing object {}", data); // To test std::unique_ptr automatic deallocation
   }
 };
 
@@ -34,7 +34,7 @@ struct Collector : ff::ff_node_t<MyTask, void> {
   auto svc(MyTask* task) -> void* override {
     if (task != nullptr) {
       auto ptr = std::unique_ptr<MyTask>(task);
-      std::println("Processing object {}", ptr->data);
+      // std::println("Processing object {}", ptr->data);
     }
     return GO_ON;
   }
@@ -45,7 +45,7 @@ auto main() -> int {
 
   pipe.add_stage(new Emitter());
   pipe.add_stage(new Collector());
-  std::println("Pipe started");
+  // std::println("Pipe started");
   pipe.run_and_wait_end();
-  std::println("Pipe ended");
+  // std::println("Pipe ended");
 }

@@ -1,7 +1,7 @@
-#include <print>
+#include <iostream>
 
 auto main() -> int {
   #pragma omp parallel
-  std::println("Hello world!");
+  std::cout << "Hello world!" << std::endl;
   return 0;
 }

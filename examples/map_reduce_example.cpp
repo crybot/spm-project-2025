@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <ff/ff.hpp>
 #include <iterator>
-#include <print>
+// #include <print>
 #include <random>
 #include <thread>
 
@@ -78,6 +78,6 @@ auto main() -> int {
 
   farm.run_and_wait_end();
 
-  std::print("Count: {}", counter.load());
+  // std::print("Count: {}", counter.load());
   return 0;
 }
