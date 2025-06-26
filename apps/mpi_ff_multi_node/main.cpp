@@ -80,17 +80,18 @@ struct SerializedBatch {
 
 // NOTE: std::ispanstream is not be supported by GCC 12.2.0. We thus provide an equivalent
 // alternative MemoryViewInputStream that holds a non-owining view to a contiguous region of memory
-auto deserializeBatch(std::vector<char>& batch) -> std::vector<files::RecordView> {
+auto deserializeBatch(std::vector<char>& batch) -> std::shared_ptr<files::ArenaBatch> {
   // auto byte_stream = std::ispanstream(batch);
   auto byte_stream = files::MemoryViewInputStream{batch};
-  auto record_loader = files::BufferedRecordLoader<1024 * 1024>(byte_stream);
-  auto allocator = DefaultHeapAllocator<char>{};
+  auto record_loader = files::BufferedRecordLoader<1024 * 1024, MemoryArena<char>, files::RecordView>(byte_stream);
+  auto record_batch = std::make_shared<files::ArenaBatch>(batch.size(), batch.size());
 
-  while (auto record = record_loader.readNext(allocator)) {
-    std::cout << *record << std::endl;
+  while (auto record = record_loader.readNext(record_batch->arena)) {
+    // std::cout << *record << std::endl;
+    record_batch->records.emplace_back(std::move(*record));
   }
 
-  return {};  // TODO;
+  return record_batch;
 }
 
 auto serializeBatch(std::shared_ptr<files::ArenaBatch> batch) -> SerializedBatch {
@@ -239,7 +240,6 @@ auto worker(int rank, MPI_Comm communicator) -> void {
     }
 
     auto serialized_records = std::vector<char>(count);
-
     MPI_Scatterv(
         nullptr,
         nullptr,
@@ -251,6 +251,8 @@ auto worker(int rank, MPI_Comm communicator) -> void {
         root_rank,
         communicator
     );
+
+    auto records = deserializeBatch(serialized_records);
   }
 
   std::cout << std::format("Worker {} terminating", rank) << std::endl;
