@@ -48,6 +48,7 @@ class ParallelSorterOMP : public AbstractParallelSorter {
       -> void;
   auto createSortedRuns(const std::filesystem::path&) -> void override;
   auto mergeSortedRuns(const std::filesystem::path&) -> void override;
+  auto mergeSortedRuns(const std::vector<std::filesystem::path>&, const std::filesystem::path&) -> void;
   auto sortAndWrite(std::shared_ptr<files::ArenaBatch>) -> void;
 
  private:
@@ -59,6 +60,14 @@ class ParallelSorterOMP : public AbstractParallelSorter {
   std::mutex vector_mutex_;  // To protect access to the shared vector of paths
   bool verbose_;
 };
+
+template <size_t BufferSize>
+auto ParallelSorterOMP<BufferSize>::createSortedRuns(const std::filesystem::path& input_path)
+    -> void {
+  collectBatches(input_path, [this](auto batch) {
+    this->sortAndWrite(batch);
+  });
+}
 
 template <size_t BUFFER_SIZE>
 auto ParallelSorterOMP<BUFFER_SIZE>::collectBatches(
@@ -100,29 +109,26 @@ auto ParallelSorterOMP<BUFFER_SIZE>::collectBatches(
 }
 
 template <size_t BufferSize>
-auto ParallelSorterOMP<BufferSize>::createSortedRuns(const std::filesystem::path& input_path)
+auto ParallelSorterOMP<BufferSize>::mergeSortedRuns(const std::filesystem::path& output_path)
     -> void {
-  collectBatches(input_path, [this](auto batch) {
-    this->sortAndWrite(batch);
-  });
+  mergeSortedRuns(temp_file_paths_, output_path);
 }
 
 template <size_t BufferSize>
-auto ParallelSorterOMP<BufferSize>::mergeSortedRuns(const std::filesystem::path& output_path)
-    -> void {
+auto ParallelSorterOMP<BufferSize>::mergeSortedRuns(
+    const std::vector<std::filesystem::path>& temp_paths, const std::filesystem::path& output_path
+) -> void {
   using files::HeapNode;
   std::exception_ptr first_exception = nullptr;
   std::once_flag capture_flag;  // The flag to ensure only one capture
   auto loaders = std::vector<std::unique_ptr<files::BufferedRecordLoader<merge_buffer_size_>>>(
-      temp_file_paths_.size()
+      temp_paths.size()
   );
 
 #pragma omp parallel for
   for (auto i = 0UL; i < loaders.size(); i++) {
     try {
-      loaders[i] = std::make_unique<files::BufferedRecordLoader<merge_buffer_size_>>(
-          temp_file_paths_[i]
-      );
+      loaders[i] = std::make_unique<files::BufferedRecordLoader<merge_buffer_size_>>(temp_paths[i]);
     } catch (std::exception& e) {
       std::call_once(capture_flag, [&]() {
         first_exception = std::current_exception();

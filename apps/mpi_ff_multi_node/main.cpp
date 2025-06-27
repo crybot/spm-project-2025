@@ -6,6 +6,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <ranges>
 
 #include "memory_arena.hpp"
 #include "parallel_sorter.hpp"
@@ -177,7 +178,7 @@ auto createBatches(
   int world_size{0};
   MPI_Comm_size(communicator, &world_size);
 
-  auto parallel_sorter = ParallelSorterOMP<BufferSize>(batch_size, 0, false);
+  auto parallel_sorter = ParallelSorterOMP<BufferSize>(batch_size, 0, true);
 
   parallel_sorter.collectBatches(file_to_sort, [&](auto batch_record) {
     scatterBatch(std::move(batch_record), world_size, communicator);
@@ -193,9 +194,27 @@ auto emitter(const std::filesystem::path& file_to_sort, size_t batch_size, MPI_C
   std::cout << "Initializing emitter..." << std::endl;
   createBatches<BufferSize>(file_to_sort, batch_size, communicator);
 
-  std::cout << "Emitter's work done" << std::endl;
+  int world_size{0};
+  MPI_Comm_size(communicator, &world_size);
 
-  // TODO: gather sorted runs paths
+  const auto write_batch_size = 1000;
+  auto parallel_sorter = ParallelSorterOMP<BufferSize>(0, write_batch_size, true);
+  auto file_paths = std::vector<std::filesystem::path>{};
+
+  for (auto rank = 1; rank < world_size; rank++) {
+    file_paths.emplace_back(std::format("sorted-{}.bin", rank));
+  }
+
+  std::cout << "Waiting for all workers to terminate" << std::endl;
+  MPI_Barrier(communicator);
+
+  parallel_sorter.mergeSortedRuns(file_paths, "sorted.bin");
+
+  for (auto& temp_path : file_paths) {
+    std::filesystem::remove(temp_path);
+  }
+
+  std::cout << "Emitter's work done" << std::endl;
 }
 
 template <size_t BufferSize>
@@ -241,8 +260,8 @@ auto worker(int rank, MPI_Comm communicator) -> void {
 
   parallel_sorter.mergeSortedRuns(out_path);
 
-  // TODO: gather sorted runs paths
   std::cout << std::format("Worker {} terminating", rank) << std::endl;
+  MPI_Barrier(communicator);
 }
 
 auto main(int argc, char* argv[]) -> int {
