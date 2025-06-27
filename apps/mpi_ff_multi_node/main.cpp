@@ -1,30 +1,17 @@
-#include <ff/ff.hpp>
-//
 #include <mpi.h>
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <ff/farm.hpp>
-#include <ff/node.hpp>
-#include <ff/parallel_for.hpp>
 #include <filesystem>
-#include <fstream>
-#include <functional>
-#include <future>
 #include <iostream>
 #include <iterator>
 #include <memory>
-#include <mutex>
-#include <utility>
 
 #include "memory_arena.hpp"
 #include "parallel_sorter.hpp"
 #include "record.hpp"
 #include "record_loader.hpp"
 #include "stop_watch.hpp"
-#include "thread_safe_queue.hpp"
-#include "utils.hpp"
 
 /*
  *                            SPM PROJECT (multi-node: MPI + FF)
@@ -72,8 +59,6 @@
  *    * Write the file to disk
  */
 
-// TODO: refactor buffer sizes
-
 constexpr int EOS_SIGNAL = -1;
 constexpr int ROOT_RANK = 0;
 
@@ -97,14 +82,16 @@ auto serializeBatch(std::shared_ptr<files::ArenaBatch> batch) -> SerializedBatch
   return {.bytes = std::move(serialized), .offsets = std::move(offsets)};
 }
 
-
+template <size_t BufferSize>
 auto deserializeBatch(std::vector<char>& batch) -> std::shared_ptr<files::ArenaBatch> {
   // NOTE: std::ispanstream is not be supported by GCC 12.2.0. We thus provide an equivalent
   // alternative MemoryViewInputStream that holds a non-owining view to a contiguous region of
   // memory
   auto byte_stream = files::MemoryViewInputStream{batch};
-  auto record_loader = files::
-      BufferedRecordLoader<1024 * 1024, MemoryArena<char>, files::RecordView>(byte_stream);
+  auto
+      record_loader = files::BufferedRecordLoader<BufferSize, MemoryArena<char>, files::RecordView>(
+          byte_stream
+      );
   auto record_batch = std::make_shared<files::ArenaBatch>(batch.size(), batch.size());
 
   while (auto record = record_loader.readNext(record_batch->arena)) {
@@ -114,7 +101,6 @@ auto deserializeBatch(std::vector<char>& batch) -> std::shared_ptr<files::ArenaB
   return record_batch;
 }
 
-// TODO: defined custom Emitter-to-Workers communicator (leave out collector)
 auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_Comm communicator)
     -> void {
   const auto root_rank = 0;
@@ -184,15 +170,14 @@ auto signalEos(int world_size, MPI_Comm communicator) -> void {
   MPI_Scatter(v.data(), 1, MPI_INT, MPI_IN_PLACE, 1, MPI_INT, ROOT_RANK, communicator);
 };
 
-template <size_t BUFFER_SIZE>
+template <size_t BufferSize>
 auto createBatches(
     const std::filesystem::path& file_to_sort, const size_t batch_size, MPI_Comm communicator
 ) -> void {
-
   int world_size{0};
   MPI_Comm_size(communicator, &world_size);
 
-  auto parallel_sorter = ParallelSorterOMP<BUFFER_SIZE>(batch_size, 0, false);
+  auto parallel_sorter = ParallelSorterOMP<BufferSize>(batch_size, 0, false);
 
   parallel_sorter.collectBatches(file_to_sort, [&](auto batch_record) {
     scatterBatch(std::move(batch_record), world_size, communicator);
@@ -201,17 +186,19 @@ auto createBatches(
   signalEos(world_size, communicator);
 }
 
-// TODO: Emitter can also act as a collector
+// NOTE: The emitter rank also acts as a collector
+template <size_t BufferSize>
 auto emitter(const std::filesystem::path& file_to_sort, size_t batch_size, MPI_Comm communicator)
     -> void {
   std::cout << "Initializing emitter..." << std::endl;
-  createBatches<1024 * 1024>(file_to_sort, batch_size, communicator);
+  createBatches<BufferSize>(file_to_sort, batch_size, communicator);
+
   std::cout << "Emitter's work done" << std::endl;
 
   // TODO: gather sorted runs paths
 }
 
-template<size_t BufferSize>
+template <size_t BufferSize>
 auto worker(int rank, MPI_Comm communicator) -> void {
   constexpr auto root_rank = 0;
   std::cout << "Initializing worker..." << std::endl;
@@ -244,7 +231,7 @@ auto worker(int rank, MPI_Comm communicator) -> void {
           root_rank,
           communicator
       );
-      auto records = deserializeBatch(serialized_records);
+      auto records = deserializeBatch<BufferSize>(serialized_records);
 
 #pragma omp task firstprivate(records) depend(inout : count)
       parallel_sorter.sortAndWrite(records);
@@ -258,10 +245,6 @@ auto worker(int rank, MPI_Comm communicator) -> void {
   std::cout << std::format("Worker {} terminating", rank) << std::endl;
 }
 
-auto collector() -> void {
-  std::cout << "Initializing collector..." << std::endl;
-}
-
 auto main(int argc, char* argv[]) -> int {
   int provided;
   MPI_Init_thread(&argc, &argv, MPI_THREAD_SERIALIZED, &provided);
@@ -272,12 +255,12 @@ auto main(int argc, char* argv[]) -> int {
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  const auto emitter_rank = 0;
-  const auto collector_rank = world_size - 1;
-  const auto color = (rank == collector_rank) ? 1 : 0;
-  MPI_Comm emitter_workers_comm;
-
-  MPI_Comm_split(MPI_COMM_WORLD, color, rank, &emitter_workers_comm);
+  // const auto emitter_rank = 0;
+  // const auto collector_rank = world_size - 1;
+  // const auto color = (rank == collector_rank) ? 1 : 0;
+  // MPI_Comm emitter_workers_comm;
+  // MPI_Comm_split(MPI_COMM_WORLD, color, rank, &emitter_workers_comm);
+  MPI_Comm emitter_workers_comm = MPI_COMM_WORLD;
 
   if (argc < 2) {
     if (rank == 0) {
@@ -286,17 +269,14 @@ auto main(int argc, char* argv[]) -> int {
     MPI_Abort(MPI_COMM_WORLD, 1);
   }
 
+  constexpr size_t buffer_size = 1024UL * 1024UL;
   constexpr auto batch_size = 1'000'000;
   const auto path = std::filesystem::path(argv[1]);
 
   if (rank == 0) {  // emitter
-    emitter(path, batch_size, emitter_workers_comm);
-  }
-  else if (rank == world_size - 1) {  // collector
-    collector();
+    emitter<buffer_size>(path, batch_size, emitter_workers_comm);
   }
   else {  // worker
-    constexpr size_t buffer_size = 1024UL*1024UL;
     worker<buffer_size>(rank, emitter_workers_comm);
   }
 
