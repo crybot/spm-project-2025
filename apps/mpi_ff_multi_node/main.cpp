@@ -19,9 +19,11 @@
 #include <utility>
 
 #include "memory_arena.hpp"
+#include "parallel_sorter.hpp"
 #include "record.hpp"
 #include "record_loader.hpp"
 #include "stop_watch.hpp"
+#include "thread_safe_queue.hpp"
 #include "utils.hpp"
 
 /*
@@ -70,6 +72,8 @@
  *    * Write the file to disk
  */
 
+// TODO: refactor buffer sizes
+
 constexpr int EOS_SIGNAL = -1;
 constexpr int ROOT_RANK = 0;
 
@@ -77,22 +81,6 @@ struct SerializedBatch {
   std::vector<char> bytes;
   std::vector<size_t> offsets;
 };
-
-// NOTE: std::ispanstream is not be supported by GCC 12.2.0. We thus provide an equivalent
-// alternative MemoryViewInputStream that holds a non-owining view to a contiguous region of memory
-auto deserializeBatch(std::vector<char>& batch) -> std::shared_ptr<files::ArenaBatch> {
-  // auto byte_stream = std::ispanstream(batch);
-  auto byte_stream = files::MemoryViewInputStream{batch};
-  auto record_loader = files::BufferedRecordLoader<1024 * 1024, MemoryArena<char>, files::RecordView>(byte_stream);
-  auto record_batch = std::make_shared<files::ArenaBatch>(batch.size(), batch.size());
-
-  while (auto record = record_loader.readNext(record_batch->arena)) {
-    // std::cout << *record << std::endl;
-    record_batch->records.emplace_back(std::move(*record));
-  }
-
-  return record_batch;
-}
 
 auto serializeBatch(std::shared_ptr<files::ArenaBatch> batch) -> SerializedBatch {
   auto serialized = std::vector<char>(batch->totalBytes());
@@ -109,8 +97,26 @@ auto serializeBatch(std::shared_ptr<files::ArenaBatch> batch) -> SerializedBatch
   return {.bytes = std::move(serialized), .offsets = std::move(offsets)};
 }
 
+
+auto deserializeBatch(std::vector<char>& batch) -> std::shared_ptr<files::ArenaBatch> {
+  // NOTE: std::ispanstream is not be supported by GCC 12.2.0. We thus provide an equivalent
+  // alternative MemoryViewInputStream that holds a non-owining view to a contiguous region of
+  // memory
+  auto byte_stream = files::MemoryViewInputStream{batch};
+  auto record_loader = files::
+      BufferedRecordLoader<1024 * 1024, MemoryArena<char>, files::RecordView>(byte_stream);
+  auto record_batch = std::make_shared<files::ArenaBatch>(batch.size(), batch.size());
+
+  while (auto record = record_loader.readNext(record_batch->arena)) {
+    record_batch->records.emplace_back(std::move(*record));
+  }
+
+  return record_batch;
+}
+
 // TODO: defined custom Emitter-to-Workers communicator (leave out collector)
-auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_Comm communicator) -> void {
+auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_Comm communicator)
+    -> void {
   const auto root_rank = 0;
   const auto num_workers = world_size - 1;
 
@@ -128,12 +134,13 @@ auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_
   // Prepare send counts and displacements
   // Ignore ranks 0;
   // Last worker takes any extra bytes
-  // TODO: check offsets and displacements overflow overflows (batch_size < std::numeric_limits<int>)
-  auto send_counts = std::vector<int>(world_size, 0); 
+  // TODO: check offsets and displacements overflow overflows (batch_size <
+  // std::numeric_limits<int>)
+  auto send_counts = std::vector<int>(world_size, 0);
   auto displacements = std::vector<int>(world_size, 0);
   size_t last_end = 0;
-  size_t computed_total = 0; // Used as a sanity check
-  
+  size_t computed_total = 0;  // Used as a sanity check
+
   for (auto w = 1; w < world_size; w++) {
     auto start_offset = last_end;
     auto end_offset = (w == world_size - 1) ? total_bytes : offsets[records_per_worker * w];
@@ -170,7 +177,6 @@ auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_
       root_rank,
       communicator
   );
-
 }
 
 auto signalEos(int world_size, MPI_Comm communicator) -> void {
@@ -179,82 +185,76 @@ auto signalEos(int world_size, MPI_Comm communicator) -> void {
 };
 
 template <size_t BUFFER_SIZE>
-auto createBatches(const std::filesystem::path& file_to_sort, const size_t batch_size, MPI_Comm communicator) -> void {
-  constexpr size_t arena_size = BUFFER_SIZE * 8;
-  auto record_loader = files::
-      BufferedRecordLoader<BUFFER_SIZE, MemoryArena<char>, files::RecordView>(file_to_sort);
-  auto batch_record = std::make_shared<files::ArenaBatch>(batch_size, arena_size);
+auto createBatches(
+    const std::filesystem::path& file_to_sort, const size_t batch_size, MPI_Comm communicator
+) -> void {
 
   int world_size{0};
   MPI_Comm_size(communicator, &world_size);
 
-#pragma omp parallel
-  {
-#pragma omp single
-    {
-      auto order_token = 0;
-      auto batch_stop_watch = StopWatch<std::chrono::microseconds>("Time to read batch");
-      while (auto record = record_loader.readNext(batch_record->arena)) {
-        batch_record->records.emplace_back(std::move(*record));
+  auto parallel_sorter = ParallelSorterOMP<BUFFER_SIZE>(batch_size, 0, false);
 
-        if (batch_record->records.size() == batch_size) {
-          batch_stop_watch.reset();
-#pragma omp task firstprivate(batch_record) depend(inout : order_token)
-          {
-            auto stop_watch = StopWatch<std::chrono::microseconds>("Time to serialize batch");
-            scatterBatch(std::move(batch_record), world_size, communicator);
-          }
-          batch_record = std::make_shared<files::ArenaBatch>(batch_size, arena_size);
-        }
-      }
+  parallel_sorter.collectBatches(file_to_sort, [&](auto batch_record) {
+    scatterBatch(std::move(batch_record), world_size, communicator);
+  });
 
-      if (batch_record->records.size() > 0) {
-#pragma omp task firstprivate(batch_record) depend(inout : order_token)
-        {
-          auto stop_watch = StopWatch<std::chrono::microseconds>("Time to serialize batch");
-          scatterBatch(std::move(batch_record), world_size, communicator);
-        }
-      }
-#pragma omp taskwait
-    }  // single
-  }  // parallel
   signalEos(world_size, communicator);
 }
 
-auto emitter(const std::filesystem::path& file_to_sort, size_t batch_size, MPI_Comm communicator) -> void {
+// TODO: Emitter can also act as a collector
+auto emitter(const std::filesystem::path& file_to_sort, size_t batch_size, MPI_Comm communicator)
+    -> void {
   std::cout << "Initializing emitter..." << std::endl;
   createBatches<1024 * 1024>(file_to_sort, batch_size, communicator);
   std::cout << "Emitter's work done" << std::endl;
+
+  // TODO: gather sorted runs paths
 }
 
+template<size_t BufferSize>
 auto worker(int rank, MPI_Comm communicator) -> void {
   constexpr auto root_rank = 0;
   std::cout << "Initializing worker..." << std::endl;
+
+  const auto write_batch_size = 1000;
+  const auto verbose = true;
+  const auto out_path = std::filesystem::path(std::format("sorted-{}.bin", rank));
+  auto parallel_sorter = ParallelSorterOMP<BufferSize>(0, write_batch_size, verbose);
+
   int count{0};
+#pragma omp parallel
+#pragma omp single
+  {
+    while (true) {
+      MPI_Scatter(nullptr, 0, MPI_INT, &count, 1, MPI_INT, root_rank, communicator);
+      std::cout << std::format("Worker {}: Received count = {}", rank, count) << std::endl;
+      if (count == EOS_SIGNAL) {
+        break;
+      }
 
-  while (true) {
-    MPI_Scatter(nullptr, 0, MPI_INT, &count, 1, MPI_INT, root_rank, communicator);
-    std::cout << std::format("Worker {}: Received count = {}", rank, count) << std::endl;
-    if (count == EOS_SIGNAL) {
-      break;
+      auto serialized_records = std::vector<char>(count);
+      MPI_Scatterv(
+          nullptr,
+          nullptr,
+          nullptr,
+          MPI_BYTE,
+          serialized_records.data(),
+          count,
+          MPI_BYTE,
+          root_rank,
+          communicator
+      );
+      auto records = deserializeBatch(serialized_records);
+
+#pragma omp task firstprivate(records) depend(inout : count)
+      parallel_sorter.sortAndWrite(records);
     }
+#pragma omp taskwait
+  }  // single
 
-    auto serialized_records = std::vector<char>(count);
-    MPI_Scatterv(
-        nullptr,
-        nullptr,
-        nullptr,
-        MPI_BYTE,
-        serialized_records.data(),
-        count,
-        MPI_BYTE,
-        root_rank,
-        communicator
-    );
+  parallel_sorter.mergeSortedRuns(out_path);
 
-    auto records = deserializeBatch(serialized_records);
-  }
-
+  // TODO: gather sorted runs paths
   std::cout << std::format("Worker {} terminating", rank) << std::endl;
 }
 
@@ -296,7 +296,8 @@ auto main(int argc, char* argv[]) -> int {
     collector();
   }
   else {  // worker
-    worker(rank, emitter_workers_comm);
+    constexpr size_t buffer_size = 1024UL*1024UL;
+    worker<buffer_size>(rank, emitter_workers_comm);
   }
 
   // MPI_Comm_free(&emitter_workers_comm);
