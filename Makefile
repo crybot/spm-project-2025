@@ -11,7 +11,7 @@
 CXX = mpic++
 
 # Base CXXFLAGS for all files
-CXXFLAGS = -std=c++20 -Iinclude -Wall -Wextra -O3 -g -MMD -MP
+CXXFLAGS = -std=c++20 -Iinclude -Ifastflow -Wall -Wextra -O3 -g -MMD -MP
 
 # Linker flags. -pthread is required by FastFlow.
 LDFLAGS = -pthread

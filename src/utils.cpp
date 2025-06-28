@@ -4,14 +4,12 @@
 #include <fstream>
 #include <ios>
 #include <limits>
-#include <print>
 #include <random>
 #include <stdexcept>
 #include <thread>
 #include <vector>
 #include <atomic>
 #include "record_loader.hpp"
-#include "utils.hpp"
 
 auto files::generateRandomFile(
     const std::filesystem::path& path, int num_records, uint32_t max_payload_length, uint32_t seed
