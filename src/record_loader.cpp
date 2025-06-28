@@ -4,7 +4,6 @@
 #include <cstring>
 #include <ios>
 #include <iostream>
-#include <print>
 
 files::RecordLoader::RecordLoader(const std::filesystem::path& path)
     : filestream_{path, std::ios::binary} {

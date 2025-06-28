@@ -36,3 +36,10 @@ inline auto operator<<(std::ostream& os, const std::vector<T>& records) -> std::
   os << "]";
   return os;
 }
+
+template<typename... Args>
+inline auto format(const Args&... args) -> std::string {
+    std::stringstream ss;
+    (ss << ... << args);
+    return ss.str();
+}

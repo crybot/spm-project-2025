@@ -5,7 +5,6 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
-#include <format>
 #include <istream>
 
 #include "memory_arena.hpp"
@@ -67,9 +66,7 @@ inline auto encodeRecord(const T& record, std::span<char>& out_stream) -> size_t
   const auto total_size = sizeof(key) + sizeof(len) + len;
 
   if (out_stream.size() < total_size) {
-    throw std::logic_error(std::format(
-        "Not enough space left in out_stream for encoding the record of size {}", total_size
-    ));
+    throw std::logic_error("Not enough space left in out_stream for encoding the record");
   }
   memcpy(out_stream.data(), &key, sizeof(key));
   memcpy(out_stream.data() + sizeof(key), &len, sizeof(len));

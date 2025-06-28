@@ -68,6 +68,10 @@ struct SerializedBatch {
   std::vector<size_t> offsets;
 };
 
+auto nameSortedFile(int rank) -> std::filesystem::path {
+  return format("sorted-", rank, ".bin");
+}
+
 auto serializeBatch(std::shared_ptr<files::ArenaBatch> batch) -> SerializedBatch {
   auto serialized = std::vector<char>(batch->totalBytes());
   auto offsets = std::vector<size_t>(batch->records.size());
@@ -89,10 +93,8 @@ auto deserializeBatch(std::vector<char>& batch) -> std::shared_ptr<files::ArenaB
   // alternative MemoryViewInputStream that holds a non-owining view to a contiguous region of
   // memory
   auto byte_stream = files::MemoryViewInputStream{batch};
-  auto
-      record_loader = files::BufferedRecordLoader<BufferSize, MemoryArena<char>, files::RecordView>(
-          byte_stream
-      );
+  auto record_loader = files::
+      BufferedRecordLoader<BufferSize, MemoryArena<char>, files::RecordView>(byte_stream);
   auto record_batch = std::make_shared<files::ArenaBatch>(batch.size(), batch.size());
 
   while (auto record = record_loader.readNext(record_batch->arena)) {
@@ -104,19 +106,15 @@ auto deserializeBatch(std::vector<char>& batch) -> std::shared_ptr<files::ArenaB
 
 auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_Comm communicator)
     -> void {
-  const auto root_rank = 0;
   const auto num_workers = world_size - 1;
 
+  // Serialize batch of records into a contiguous byte-stream
   auto serialized_batch = serializeBatch(batch);
   const auto& offsets = serialized_batch.offsets;
-  const auto records_per_worker = offsets.size() / num_workers;  // Last worker gets all remaining
+  const auto records_per_worker = offsets.size() / num_workers;  // Last worker gets all remaining bytes
   const auto total_bytes = static_cast<int>(serialized_batch.bytes.size());
 
-  assert(world_size >= 3);  // at least 2 workers + emitter
-
-  std::cout << std::format("Num records: {}", batch->records.size()) << std::endl;
-  std::cout << std::format("Sending {}/{} records per worker", records_per_worker, offsets.size())
-            << std::endl;
+  assert(world_size >= 2);  // at least 1 worker + emitter
 
   // Prepare send counts and displacements
   // Ignore ranks 0;
@@ -140,18 +138,12 @@ auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_
   }
   assert(computed_total == serialized_batch.bytes.size());
 
-  std::cout << "Sending counts ";
-  std::ranges::copy(send_counts, std::ostream_iterator<int>(std::cout, " "));
-  std::cout << std::endl;
-
+  std::cout << "Sending counts" << std::endl;
   // Send counts
   // MPI_IN_PLACE avoids the copy from send_counts[0] into a local buffer in the root node
-  MPI_Scatter(send_counts.data(), 1, MPI_INT, MPI_IN_PLACE, 1, MPI_INT, root_rank, communicator);
+  MPI_Scatter(send_counts.data(), 1, MPI_INT, MPI_IN_PLACE, 1, MPI_INT, ROOT_RANK, communicator);
 
-  std::cout << "Sending displacements ";
-  std::ranges::copy(displacements, std::ostream_iterator<int>(std::cout, " "));
-  std::cout << std::endl;
-
+  std::cout << "Sending serialized batch" << std::endl;
   // Send variable-sized records
   MPI_Scatterv(
       serialized_batch.bytes.data(),
@@ -161,7 +153,7 @@ auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_
       MPI_IN_PLACE,
       0,
       MPI_BYTE,
-      root_rank,
+      ROOT_RANK,
       communicator
   );
 }
@@ -197,34 +189,33 @@ auto emitter(const std::filesystem::path& file_to_sort, size_t batch_size, MPI_C
   int world_size{0};
   MPI_Comm_size(communicator, &world_size);
 
-  const auto write_batch_size = 1000;
-  auto parallel_sorter = ParallelSorterOMP<BufferSize>(0, write_batch_size, true);
-  auto file_paths = std::vector<std::filesystem::path>{};
-
-  for (auto rank = 1; rank < world_size; rank++) {
-    file_paths.emplace_back(std::format("sorted-{}.bin", rank));
-  }
+  // Vector of sorted file paths computed by worker nodes (fixed naming scheme)
+  auto sorted_file_paths = [=]() {
+    auto v = std::vector<std::filesystem::path>{};
+    for (auto rank : std::views::iota(1, world_size)) {
+      v.emplace_back(nameSortedFile(rank));
+    }
+    return v;
+  }();
 
   std::cout << "Waiting for all workers to terminate" << std::endl;
   MPI_Barrier(communicator);
 
-  parallel_sorter.mergeSortedRuns(file_paths, "sorted.bin");
-
-  for (auto& temp_path : file_paths) {
-    std::filesystem::remove(temp_path);
-  }
+  const auto write_batch_size = 1000;
+  auto parallel_sorter = ParallelSorterOMP<BufferSize>(0, write_batch_size, true);
+  parallel_sorter.setFilePaths(std::move(sorted_file_paths));
+  parallel_sorter.mergeSortedRuns("sorted.bin");
 
   std::cout << "Emitter's work done" << std::endl;
 }
 
 template <size_t BufferSize>
 auto worker(int rank, MPI_Comm communicator) -> void {
-  constexpr auto root_rank = 0;
   std::cout << "Initializing worker..." << std::endl;
 
   const auto write_batch_size = 1000;
   const auto verbose = true;
-  const auto out_path = std::filesystem::path(std::format("sorted-{}.bin", rank));
+  const auto out_path = nameSortedFile(rank);
   auto parallel_sorter = ParallelSorterOMP<BufferSize>(0, write_batch_size, verbose);
 
   int count{0};
@@ -232,8 +223,8 @@ auto worker(int rank, MPI_Comm communicator) -> void {
 #pragma omp single
   {
     while (true) {
-      MPI_Scatter(nullptr, 0, MPI_INT, &count, 1, MPI_INT, root_rank, communicator);
-      std::cout << std::format("Worker {}: Received count = {}", rank, count) << std::endl;
+      MPI_Scatter(nullptr, 0, MPI_INT, &count, 1, MPI_INT, ROOT_RANK, communicator);
+      std::cout << "Worker " << rank << ": Received count = " << count << std::endl;
       if (count == EOS_SIGNAL) {
         break;
       }
@@ -247,7 +238,7 @@ auto worker(int rank, MPI_Comm communicator) -> void {
           serialized_records.data(),
           count,
           MPI_BYTE,
-          root_rank,
+          ROOT_RANK,
           communicator
       );
       auto records = deserializeBatch<BufferSize>(serialized_records);
@@ -260,7 +251,7 @@ auto worker(int rank, MPI_Comm communicator) -> void {
 
   parallel_sorter.mergeSortedRuns(out_path);
 
-  std::cout << std::format("Worker {} terminating", rank) << std::endl;
+  std::cout << "Worker " << rank << " terminating" << std::endl;
   MPI_Barrier(communicator);
 }
 
@@ -274,11 +265,6 @@ auto main(int argc, char* argv[]) -> int {
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  // const auto emitter_rank = 0;
-  // const auto collector_rank = world_size - 1;
-  // const auto color = (rank == collector_rank) ? 1 : 0;
-  // MPI_Comm emitter_workers_comm;
-  // MPI_Comm_split(MPI_COMM_WORLD, color, rank, &emitter_workers_comm);
   MPI_Comm emitter_workers_comm = MPI_COMM_WORLD;
 
   if (argc < 2) {
@@ -298,8 +284,6 @@ auto main(int argc, char* argv[]) -> int {
   else {  // worker
     worker<buffer_size>(rank, emitter_workers_comm);
   }
-
-  // MPI_Comm_free(&emitter_workers_comm);
 
   MPI_Finalize();
   return 0;

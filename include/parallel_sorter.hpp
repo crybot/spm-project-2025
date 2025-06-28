@@ -50,6 +50,7 @@ class ParallelSorterOMP : public AbstractParallelSorter {
   auto mergeSortedRuns(const std::filesystem::path&) -> void override;
   auto mergeSortedRuns(const std::vector<std::filesystem::path>&, const std::filesystem::path&) -> void;
   auto sortAndWrite(std::shared_ptr<files::ArenaBatch>) -> void;
+  auto setFilePaths(std::vector<std::filesystem::path>) -> void;
 
  private:
   auto cleanupTemporaryFiles() -> void;
@@ -60,6 +61,11 @@ class ParallelSorterOMP : public AbstractParallelSorter {
   std::mutex vector_mutex_;  // To protect access to the shared vector of paths
   bool verbose_;
 };
+
+template <size_t BufferSize>
+auto ParallelSorterOMP<BufferSize>::setFilePaths(std::vector<std::filesystem::path> file_paths) -> void {
+  temp_file_paths_ = std::move(file_paths);
+}
 
 template <size_t BufferSize>
 auto ParallelSorterOMP<BufferSize>::createSortedRuns(const std::filesystem::path& input_path)
@@ -235,7 +241,7 @@ auto ParallelSorterOMP<BufferSize>::writeOutputBatch(
 
   output_file.write(out_buffer.data(), static_cast<std::streamsize>(bytes_to_write));
   if (verbose_) {
-    std::cout << std::format("Written {} bytes to output file\n", bytes_to_write);
+    std::cout << "Written " << bytes_to_write << " bytes to output file\n";
   }
 }
 
@@ -263,7 +269,7 @@ auto ParallelSorterOMP<BufferSize>::sortAndWrite(std::shared_ptr<files::ArenaBat
     assert(out_stream.empty());
     out_file.write(out_buffer.data(), static_cast<std::streamsize>(bytes_to_write));
     if (verbose_) {
-      std::cout << std::format("Written {} bytes to {}\n", bytes_to_write, temp_file.string());
+      std::cout << "Written " << bytes_to_write << " bytes to "  << temp_file.string() << std::endl;
     }
 
     {
@@ -278,7 +284,7 @@ auto ParallelSorterOMP<BufferSize>::cleanupTemporaryFiles() -> void {
 #pragma omp parallel for
   for (auto i = 0UL; i < temp_file_paths_.size(); i++) {
     if (verbose_) {
-      std::cout << std::format("Deleting temporary file {}\n", temp_file_paths_[i].string());
+      std::cout << "Deleting temporary file " << temp_file_paths_[i].string() << std::endl;
     }
     std::filesystem::remove(temp_file_paths_[i]);
   }

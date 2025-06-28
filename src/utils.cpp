@@ -1,7 +1,6 @@
 #include "utils.hpp"
 
 #include <cstdint>
-#include <format>
 #include <fstream>
 #include <ios>
 #include <limits>
@@ -12,6 +11,7 @@
 #include <vector>
 #include <atomic>
 #include "record_loader.hpp"
+#include "utils.hpp"
 
 auto files::generateRandomFile(
     const std::filesystem::path& path, int num_records, uint32_t max_payload_length, uint32_t seed
@@ -25,7 +25,7 @@ auto files::generateRandomFile(
   }
   if (max_payload_length < files::MINIMUM_PAYLOAD_LENGTH) {
     throw std::invalid_argument(
-        std::format("max_payload_length must be >= {}", files::MINIMUM_PAYLOAD_LENGTH)
+        format("max_payload_length must be >= ", files::MINIMUM_PAYLOAD_LENGTH)
     );
   }
 
