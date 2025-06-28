@@ -1,10 +1,10 @@
 #include <mpi.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <iterator>
 #include <memory>
 #include <ranges>
 
@@ -13,6 +13,7 @@
 #include "record.hpp"
 #include "record_loader.hpp"
 #include "stop_watch.hpp"
+#include "cli_parser.hpp"
 
 /*
  *                            SPM PROJECT (multi-node: MPI + FF)
@@ -181,8 +182,13 @@ auto createBatches(
 
 // NOTE: The emitter rank also acts as a collector
 template <size_t BufferSize>
-auto emitter(const std::filesystem::path& file_to_sort, size_t batch_size, MPI_Comm communicator)
-    -> void {
+auto emitter(
+    const std::filesystem::path& file_to_sort,
+    const std::filesystem::path& out_path,
+    size_t batch_size,
+    MPI_Comm communicator,
+    bool verbose = false
+) -> void {
   std::cout << "Initializing emitter..." << std::endl;
   createBatches<BufferSize>(file_to_sort, batch_size, communicator);
 
@@ -202,19 +208,18 @@ auto emitter(const std::filesystem::path& file_to_sort, size_t batch_size, MPI_C
   MPI_Barrier(communicator);
 
   const auto write_batch_size = 1000;
-  auto parallel_sorter = ParallelSorterOMP<BufferSize>(0, write_batch_size, true);
+  auto parallel_sorter = ParallelSorterOMP<BufferSize>(0, write_batch_size, verbose);
   parallel_sorter.setFilePaths(std::move(sorted_file_paths));
-  parallel_sorter.mergeSortedRuns("sorted.bin");
+  parallel_sorter.mergeSortedRuns(out_path);
 
   std::cout << "Emitter's work done" << std::endl;
 }
 
 template <size_t BufferSize>
-auto worker(int rank, MPI_Comm communicator) -> void {
+auto worker(int rank, MPI_Comm communicator, bool verbose = false) -> void {
   std::cout << "Initializing worker..." << std::endl;
 
   const auto write_batch_size = 1000;
-  const auto verbose = true;
   const auto out_path = nameSortedFile(rank);
   auto parallel_sorter = ParallelSorterOMP<BufferSize>(0, write_batch_size, verbose);
 
@@ -255,34 +260,41 @@ auto worker(int rank, MPI_Comm communicator) -> void {
   MPI_Barrier(communicator);
 }
 
+auto printHelp(const std::string_view& prog_name) -> void {
+  std::cerr << "Usage: " << prog_name << " --input <file> --output <file> [--batch_size <batch_size>] [--verbose]"
+            << std::endl;
+}
+
 auto main(int argc, char* argv[]) -> int {
   int provided;
   MPI_Init_thread(&argc, &argv, MPI_THREAD_SERIALIZED, &provided);
 
   int rank;
   int world_size;
-
   MPI_Comm_size(MPI_COMM_WORLD, &world_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
   MPI_Comm emitter_workers_comm = MPI_COMM_WORLD;
 
-  if (argc < 2) {
+  if (argc < 3) {
     if (rank == 0) {
-      std::cerr << "Usage: <command> <file>" << std::endl;
+      printHelp(argv[0]);
     }
     MPI_Abort(MPI_COMM_WORLD, 1);
   }
 
+  auto cli_parser = CliParser(argc, argv);
   constexpr size_t buffer_size = 1024UL * 1024UL;
-  constexpr auto batch_size = 1'000'000;
-  const auto path = std::filesystem::path(argv[1]);
+  const auto in_path = std::filesystem::path(*cli_parser.get<std::string>("input"));
+  const auto out_path = std::filesystem::path(*cli_parser.get<std::string>("output"));
+  const auto batch_size = cli_parser.get<size_t>("batch_size").value_or(1'000'000);
+  const auto verbose = cli_parser.get<bool>("verbose").value_or(false);
 
   if (rank == 0) {  // emitter
-    emitter<buffer_size>(path, batch_size, emitter_workers_comm);
+    auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to sort file");
+    emitter<buffer_size>(in_path, out_path, batch_size, emitter_workers_comm, verbose);
   }
   else {  // worker
-    worker<buffer_size>(rank, emitter_workers_comm);
+    worker<buffer_size>(rank, emitter_workers_comm, verbose);
   }
 
   MPI_Finalize();

@@ -9,12 +9,12 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <utility>
 
+#include "cli_parser.hpp"
 #include "memory_arena.hpp"
 #include "record.hpp"
 #include "record_loader.hpp"
@@ -55,6 +55,7 @@ static constexpr size_t header_size = sizeof(uint64_t) + sizeof(uint32_t);
 // because batches will live on different memory regions. Nonetheless, the IO here is the main
 // bottleneck and, since we cannot assume the entire dataset can be stored in internal memory, much
 // of the improvements are shadowed by read (and write) operations.
+template<size_t BufferSize>
 struct Emitter : ff::ff_node_t<files::ArenaBatch> {
   Emitter() = delete;
   Emitter(std::filesystem::path path, size_t batch_size, size_t expected_payload_length = 8)
@@ -64,7 +65,7 @@ struct Emitter : ff::ff_node_t<files::ArenaBatch> {
   auto svc(files::ArenaBatch*) -> files::ArenaBatch* override {
     auto const arena_size = batch_size_ * payload_length_;
     auto record_loader = files::
-        BufferedRecordLoader<1024 * 1024, MemoryArena<char>, files::RecordView>(path_);
+        BufferedRecordLoader<BufferSize, MemoryArena<char>, files::RecordView>(path_);
     auto batch_record = std::make_unique<files::ArenaBatch>(batch_size_, arena_size);
 
     while (auto record = record_loader.readNext(batch_record->arena)) {
@@ -283,15 +284,32 @@ struct FileWriter : ff::ff_node_t<files::RecordBatch, void> {
   std::ofstream out_file_;
 };
 
-auto main(int, char* argv[]) -> int {
-  const size_t batch_size = std::stoi(argv[1]);
-  const size_t num_sorters = std::stoi(argv[2]);
-  const size_t num_writers = std::stoi(argv[3]);
-  auto path = std::filesystem::path(argv[4]);
+auto printHelp(const std::string_view& prog_name) -> void {
+  std::cerr
+      << "Usage: " << prog_name
+      << " --input <file> --output <file> --num_sorters <n> --num_writers <n> [--batch_size <batch_size>] [--verbose]"
+      << std::endl;
+}
+
+auto main(int argc, char* argv[]) -> int {
+  if (argc < 3) {
+    printHelp(argv[0]);
+    exit(1);
+  }
+
+  auto cli_parser = CliParser(argc, argv);
+  constexpr size_t buffer_size = 1024UL * 1024UL;
+  const auto in_path = std::filesystem::path(*cli_parser.get<std::string>("input"));
+  const auto out_path = std::filesystem::path(*cli_parser.get<std::string>("output"));
+  const auto num_sorters = *cli_parser.get<size_t>("num_sorters");
+  const auto num_writers = *cli_parser.get<size_t>("num_writers");
+  const auto batch_size = cli_parser.get<size_t>("batch_size").value_or(1'000'000);
+  const auto verbose = cli_parser.get<bool>("verbose").value_or(false);
+  constexpr auto write_batch_size = 1000;
 
   // Emitter stage: reads file and batches records
   auto sorting_pipe = ff::ff_pipeline{};
-  sorting_pipe.add_stage(new Emitter(path, batch_size, files::MINIMUM_PAYLOAD_LENGTH));
+  sorting_pipe.add_stage(new Emitter<buffer_size>(in_path, batch_size, files::MINIMUM_PAYLOAD_LENGTH));
 
   // Sorting stage: farm of workers that sorts batches
   auto sorter_farm = ff::ff_farm();
@@ -321,9 +339,9 @@ auto main(int, char* argv[]) -> int {
 
   // Merging pipeline
   auto merging_pipe = ff::ff_pipeline{};
-  merging_pipe.add_stage(new FileMerger(std::move(result_collector->sorted_files), 1000));
+  merging_pipe.add_stage(new FileMerger(std::move(result_collector->sorted_files), write_batch_size));
 
-  merging_pipe.add_stage(new FileWriter("sorted.bin"));
+  merging_pipe.add_stage(new FileWriter(out_path));
   merging_pipe.run_and_wait_end();
 
   return 0;

@@ -118,7 +118,7 @@ files::BufferedRecordLoader<BufferSize, Allocator, RecordType>::BufferedRecordLo
       stream_(*filestream_) {
 
   if (!stream_.good()) {
-    throw std::logic_error(format("Could not open file ", path.string()));
+    throw std::logic_error("Could not open file " + path.string());
   }
   primeBuffer();
 }

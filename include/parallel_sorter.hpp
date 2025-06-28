@@ -33,7 +33,7 @@ class AbstractParallelSorter {
   size_t arena_size_;
 };
 
-template <size_t BUFFER_SIZE>
+template <size_t BufferSize>
 class ParallelSorterOMP : public AbstractParallelSorter {
  public:
   ParallelSorterOMP() = delete;
@@ -56,7 +56,7 @@ class ParallelSorterOMP : public AbstractParallelSorter {
   auto cleanupTemporaryFiles() -> void;
   auto writeOutputBatch(std::shared_ptr<files::RecordBatch>, std::ofstream&) -> void;
 
-  constexpr static size_t merge_buffer_size_ = 2028;
+  constexpr static size_t merge_buffer_size_ = 2048;
   std::vector<std::filesystem::path> temp_file_paths_;
   std::mutex vector_mutex_;  // To protect access to the shared vector of paths
   bool verbose_;
@@ -75,8 +75,8 @@ auto ParallelSorterOMP<BufferSize>::createSortedRuns(const std::filesystem::path
   });
 }
 
-template <size_t BUFFER_SIZE>
-auto ParallelSorterOMP<BUFFER_SIZE>::collectBatches(
+template <size_t BufferSize>
+auto ParallelSorterOMP<BufferSize>::collectBatches(
     const std::filesystem::path& input_path,
     const std::function<void(std::shared_ptr<files::ArenaBatch>)>& process_batch
 ) -> void {
@@ -86,7 +86,7 @@ auto ParallelSorterOMP<BUFFER_SIZE>::collectBatches(
     {
       auto order_token = 0;
       auto record_loader = files::
-          BufferedRecordLoader<BUFFER_SIZE, MemoryArena<char>, files::RecordView>(input_path);
+          BufferedRecordLoader<BufferSize, MemoryArena<char>, files::RecordView>(input_path);
       auto batch_record = std::make_shared<files::ArenaBatch>(
           this->reading_batch_size_, this->arena_size_
       );

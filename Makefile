@@ -32,7 +32,7 @@ BUILD_DIR = build_make
 SRCS = $(wildcard src/*.cpp) \
        $(wildcard apps/ff_single_node/*.cpp) \
        $(wildcard apps/omp_single_node/*.cpp) \
-       $(wildcard apps/mpi_ff_multi_node/*.cpp) \
+       $(wildcard apps/mpi_omp_multi_node/*.cpp) \
        $(wildcard tools/*.cpp) \
        $(wildcard tests/*.cpp) \
        $(wildcard examples/*.cpp)
@@ -55,7 +55,7 @@ READ_FILE_EXE = $(BUILD_DIR)/tools/read_file
 # Applications
 FF_APP_EXE = $(BUILD_DIR)/apps/ff_single_node/ff_single_node
 OMP_APP_EXE = $(BUILD_DIR)/apps/omp_single_node/omp_single_node
-MPI_APP_EXE = $(BUILD_DIR)/apps/mpi_ff_multi_node/mpi_ff_multi_node # New MPI target
+MPI_APP_EXE = $(BUILD_DIR)/apps/mpi_omp_multi_node/mpi_omp_multi_node # New MPI target
 # Tests
 TEST_EXE = $(BUILD_DIR)/tests/memory_arena_test
 # Examples
@@ -83,7 +83,7 @@ clean:
 # Linking Rules
 # -----------------------------------------------------------------------------
 # New rule for linking the MPI application
-$(MPI_APP_EXE): $(BUILD_DIR)/apps/mpi_ff_multi_node/main.o $(COMMON_OBJS)
+$(MPI_APP_EXE): $(BUILD_DIR)/apps/mpi_omp_multi_node/main.o $(COMMON_OBJS)
 	@echo "Linking (MPI) $@..."
 	@mkdir -p $(@D)
 	$(CXX) $(LDFLAGS) $^ $(OMP_FLAGS) -o $@

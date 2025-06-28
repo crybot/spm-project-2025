@@ -45,14 +45,14 @@ in
 
     buildInputs = [
       fastflow-lib
-      # pkgs.gcc
-      # pkgs.gnumake
-      # pkgs.hwloc
-      # pkgs.meson # Does not support c++20 modules
-      # pkgs.cmake
-      # pkgs.ninja
-      # pkgs.pkg-config
-      # pkgs.mpi
+      pkgs.gcc
+      pkgs.gnumake
+      pkgs.hwloc
+      pkgs.meson # Does not support c++20 modules
+      pkgs.cmake
+      pkgs.ninja
+      pkgs.pkg-config
+      pkgs.mpi
     ];
 
     # shellHook = ''
