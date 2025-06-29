@@ -105,7 +105,7 @@ auto deserializeBatch(std::vector<char>& batch) -> std::shared_ptr<files::ArenaB
   return record_batch;
 }
 
-auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_Comm communicator)
+auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_Comm communicator, bool verbose = false)
     -> void {
   const auto num_workers = world_size - 1;
 
@@ -139,12 +139,16 @@ auto scatterBatch(std::shared_ptr<files::ArenaBatch> batch, int world_size, MPI_
   }
   assert(computed_total == serialized_batch.bytes.size());
 
-  std::cout << "Sending counts" << std::endl;
+  if (verbose) {
+    std::cout << "Sending counts" << std::endl;
+  }
   // Send counts
   // MPI_IN_PLACE avoids the copy from send_counts[0] into a local buffer in the root node
   MPI_Scatter(send_counts.data(), 1, MPI_INT, MPI_IN_PLACE, 1, MPI_INT, ROOT_RANK, communicator);
 
-  std::cout << "Sending serialized batch" << std::endl;
+  if (verbose) {
+    std::cout << "Sending serialized batch" << std::endl;
+  }
   // Send variable-sized records
   MPI_Scatterv(
       serialized_batch.bytes.data(),
@@ -166,7 +170,7 @@ auto signalEos(int world_size, MPI_Comm communicator) -> void {
 
 template <size_t BufferSize>
 auto createBatches(
-    const std::filesystem::path& file_to_sort, const size_t batch_size, MPI_Comm communicator
+    const std::filesystem::path& file_to_sort, const size_t batch_size, MPI_Comm communicator, bool verbose = false
 ) -> void {
   int world_size{0};
   MPI_Comm_size(communicator, &world_size);
@@ -174,7 +178,7 @@ auto createBatches(
   auto parallel_sorter = ParallelSorterOMP<BufferSize>(batch_size, 0, true);
 
   parallel_sorter.collectBatches(file_to_sort, [&](auto batch_record) {
-    scatterBatch(std::move(batch_record), world_size, communicator);
+    scatterBatch(std::move(batch_record), world_size, communicator, verbose);
   });
 
   signalEos(world_size, communicator);
@@ -189,8 +193,10 @@ auto emitter(
     MPI_Comm communicator,
     bool verbose = false
 ) -> void {
-  std::cout << "Initializing emitter..." << std::endl;
-  createBatches<BufferSize>(file_to_sort, batch_size, communicator);
+  if (verbose) {
+    std::cout << "Initializing emitter..." << std::endl;
+  }
+  createBatches<BufferSize>(file_to_sort, batch_size, communicator, verbose);
 
   int world_size{0};
   MPI_Comm_size(communicator, &world_size);
@@ -204,7 +210,9 @@ auto emitter(
     return v;
   }();
 
-  std::cout << "Waiting for all workers to terminate" << std::endl;
+  if (verbose) {
+    std::cout << "Waiting for all workers to terminate" << std::endl;
+  }
   MPI_Barrier(communicator);
 
   const auto write_batch_size = 1000;
@@ -212,12 +220,16 @@ auto emitter(
   parallel_sorter.setFilePaths(std::move(sorted_file_paths));
   parallel_sorter.mergeSortedRuns(out_path);
 
-  std::cout << "Emitter's work done" << std::endl;
+  if (verbose) {
+    std::cout << "Emitter's work done" << std::endl;
+  }
 }
 
 template <size_t BufferSize>
 auto worker(int rank, MPI_Comm communicator, bool verbose = false) -> void {
-  std::cout << "Initializing worker..." << std::endl;
+  if (verbose) {
+    std::cout << "Initializing worker..." << std::endl;
+  }
 
   const auto write_batch_size = 1000;
   const auto out_path = nameSortedFile(rank);
@@ -229,7 +241,10 @@ auto worker(int rank, MPI_Comm communicator, bool verbose = false) -> void {
   {
     while (true) {
       MPI_Scatter(nullptr, 0, MPI_INT, &count, 1, MPI_INT, ROOT_RANK, communicator);
-      std::cout << "Worker " << rank << ": Received count = " << count << std::endl;
+
+      if (verbose) {
+        std::cout << "Worker " << rank << ": Received count = " << count << std::endl;
+      }
       if (count == EOS_SIGNAL) {
         break;
       }
@@ -256,7 +271,9 @@ auto worker(int rank, MPI_Comm communicator, bool verbose = false) -> void {
 
   parallel_sorter.mergeSortedRuns(out_path);
 
-  std::cout << "Worker " << rank << " terminating" << std::endl;
+  if (verbose) {
+    std::cout << "Worker " << rank << " terminating" << std::endl;
+  }
   MPI_Barrier(communicator);
 }
 
