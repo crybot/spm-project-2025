@@ -30,6 +30,7 @@ BUILD_DIR = build_make
 
 # Source files are found automatically, including the new MPI app
 SRCS = $(wildcard src/*.cpp) \
+       $(wildcard apps/sequential_single_node/*.cpp) \
        $(wildcard apps/ff_single_node/*.cpp) \
        $(wildcard apps/omp_single_node/*.cpp) \
        $(wildcard apps/mpi_omp_multi_node/*.cpp) \
@@ -53,9 +54,10 @@ OMP_EXAMPLE_OBJ = $(BUILD_DIR)/examples/omp_example.o
 CREATE_FILE_EXE = $(BUILD_DIR)/tools/create_file
 READ_FILE_EXE = $(BUILD_DIR)/tools/read_file
 # Applications
+SEQ_APP_EXE = $(BUILD_DIR)/apps/sequential_single_node/sequential_single_node
 FF_APP_EXE = $(BUILD_DIR)/apps/ff_single_node/ff_single_node
 OMP_APP_EXE = $(BUILD_DIR)/apps/omp_single_node/omp_single_node
-MPI_APP_EXE = $(BUILD_DIR)/apps/mpi_omp_multi_node/mpi_omp_multi_node # New MPI target
+MPI_APP_EXE = $(BUILD_DIR)/apps/mpi_omp_multi_node/mpi_omp_multi_node
 # Tests
 TEST_EXE = $(BUILD_DIR)/tests/memory_arena_test
 # Examples
@@ -66,7 +68,7 @@ FF_EXAMPLE_EXES = $(BUILD_DIR)/examples/farm_example \
 OMP_EXAMPLE_EXES = $(BUILD_DIR)/examples/omp_example
 
 # Add the new MPI executable to the list of all targets
-TARGETS = $(CREATE_FILE_EXE) $(READ_FILE_EXE) $(FF_APP_EXE) $(OMP_APP_EXE) $(MPI_APP_EXE) $(TEST_EXE) $(FF_EXAMPLE_EXES) $(OMP_EXAMPLE_EXES)
+TARGETS = $(CREATE_FILE_EXE) $(READ_FILE_EXE) $(SEQ_APP_EXE) $(FF_APP_EXE) $(OMP_APP_EXE) $(MPI_APP_EXE) $(TEST_EXE) $(FF_EXAMPLE_EXES) $(OMP_EXAMPLE_EXES)
 
 # -----------------------------------------------------------------------------
 # Main Rules
@@ -82,9 +84,13 @@ clean:
 # -----------------------------------------------------------------------------
 # Linking Rules
 # -----------------------------------------------------------------------------
-# New rule for linking the MPI application
 $(MPI_APP_EXE): $(BUILD_DIR)/apps/mpi_omp_multi_node/main.o $(COMMON_OBJS)
 	@echo "Linking (MPI) $@..."
+	@mkdir -p $(@D)
+	$(CXX) $(LDFLAGS) $^ $(OMP_FLAGS) -o $@
+
+$(SEQ_APP_EXE): $(BUILD_DIR)/apps/sequential_single_node/main.o $(COMMON_OBJS)
+	@echo "Linking $@..."
 	@mkdir -p $(@D)
 	$(CXX) $(LDFLAGS) $^ $(OMP_FLAGS) -o $@
 
