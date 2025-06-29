@@ -3,6 +3,7 @@
 
 #include "parallel_sorter.hpp"
 #include "cli_parser.hpp"
+#include "stop_watch.hpp"
 
 auto printHelp(const std::string_view& prog_name) -> void {
   std::cerr << "Usage: " << prog_name << " --input <file> --output <file> [--batch_size <batch_size>] [--verbose]"
@@ -23,6 +24,7 @@ auto main(int argc, char* argv[]) -> int {
   const auto verbose = cli_parser.get<bool>("verbose").value_or(false);
   constexpr auto write_batch_size = 1000;
 
+  auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to sort file");
   auto parallel_sorter = ParallelSorterOMP<buffer_size>(batch_size, write_batch_size, verbose);
   parallel_sorter.sort(in_path, out_path);
 

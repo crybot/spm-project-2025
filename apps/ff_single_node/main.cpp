@@ -334,6 +334,7 @@ auto main(int argc, char* argv[]) -> int {
   auto result_collector = new ResultCollector();
   sorting_pipe.add_stage(result_collector);
 
+  auto stop_watch = StopWatch<std::chrono::milliseconds>("Time to sort file");
   // Wait for each batch to be written on disk
   sorting_pipe.run_and_wait_end();  // This acts as a barrier
 
