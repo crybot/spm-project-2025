@@ -45,10 +45,10 @@
  * - Emitter:
  *    * Read large batches from the input file;
  *    * For each batch scatter it to worker nodes;
- *    * When EOF reached, send an MPI_REQUEST_NULL to all worker nodes;
+ *    * When EOF reached, notify it all worker nodes;
  * - Worker:
  *    * Sort each batch in memory and store it on a local file (maybe /tmp can be used as scratch)
- *    * When MPI_REQUEST_NULL is received, apply a K-way merge
+ *    * When EOF message is received, apply a K-way merge
  *    * Couple options here: either send the locally sorted file through the network with MPI (they
  * might be huge) or write the file to the NFS mounted directory to make it accessible to the
  * collector.

@@ -40,8 +40,6 @@
  * Notes:
  * - Only use FF building blocks (no high-level patterns)
  * - There's just a single file, which does not fit in memory:
- *    + Memory mapped file?
- *    + Moving around range references?
  * - We can assume 32GB of ram
  *
  */
